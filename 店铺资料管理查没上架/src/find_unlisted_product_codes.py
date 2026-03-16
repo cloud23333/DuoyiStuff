@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -54,13 +55,7 @@ def normalize_code(value: object) -> str:
 
 
 def should_exclude_code(code: str) -> bool:
-    if not code:
-        return True
-    if code.upper().startswith("FH"):
-        return True
-    if CHINESE_CHAR_PATTERN.search(code):
-        return True
-    return False
+    return not code or code.upper().startswith("FH") or CHINESE_CHAR_PATTERN.search(code) is not None
 
 
 def parse_datetime(value: object) -> Optional[datetime]:
@@ -87,7 +82,7 @@ def parse_datetime(value: object) -> Optional[datetime]:
         try:
             return datetime.strptime(text, fmt)
         except ValueError:
-            continue
+            pass
     return None
 
 
@@ -130,16 +125,12 @@ def read_excel(path: Path, sheet_name: Optional[str]) -> Tuple[List[str], List[D
     for raw_row in row_iter:
         if raw_row is None:
             continue
-        row_data: Dict[str, object] = {}
-        has_value = False
-        for i, col in enumerate(columns):
-            if not col:
-                continue
-            cell = raw_row[i] if i < len(raw_row) else None
-            row_data[col] = cell
-            if normalize_text(cell):
-                has_value = True
-        if has_value:
+        row_data = {
+            col: raw_row[i] if i < len(raw_row) else None
+            for i, col in enumerate(columns)
+            if col
+        }
+        if any(normalize_text(cell) for cell in row_data.values()):
             rows.append(row_data)
 
     return columns, rows
@@ -174,10 +165,11 @@ def build_catalog_time_map(
             continue
 
         time_value = normalize_time_output(row.get(time_col)) if time_col else TimeValue(raw="", parsed=None)
-        if sku not in catalog_map:
+        current = catalog_map.get(sku)
+        if current is None:
             catalog_map[sku] = time_value
         else:
-            catalog_map[sku] = choose_latest_time(catalog_map[sku], time_value)
+            catalog_map[sku] = choose_latest_time(current, time_value)
 
     return catalog_map
 
@@ -191,9 +183,7 @@ def build_shop_sku_map(rows: List[Dict[str, object]], shop_col: str, sku_col: st
         sku = normalize_code(row.get(sku_col))
         if should_exclude_code(sku):
             continue
-        if shop not in result:
-            result[shop] = set()
-        result[shop].add(sku)
+        result.setdefault(shop, set()).add(sku)
     return result
 
 
@@ -206,9 +196,9 @@ def result_sort_key(row: Dict[str, object]) -> Tuple[str, int, float, str]:
 
 def build_result_rows(shop_sku_map: Dict[str, Set[str]], catalog_map: Dict[str, TimeValue]) -> List[Dict[str, object]]:
     result: List[Dict[str, object]] = []
-    all_catalog_skus = set(catalog_map.keys())
-    for shop in sorted(shop_sku_map.keys()):
-        missing_skus = all_catalog_skus - shop_sku_map[shop]
+    all_catalog_skus = set(catalog_map)
+    for shop, shop_skus in sorted(shop_sku_map.items()):
+        missing_skus = all_catalog_skus - shop_skus
         for sku in missing_skus:
             tv = catalog_map[sku]
             result.append(
@@ -227,13 +217,10 @@ def build_result_rows(shop_sku_map: Dict[str, Set[str]], catalog_map: Dict[str, 
 
 
 def build_summary_rows(detail_rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    counter: Dict[str, int] = {}
-    for row in detail_rows:
-        shop = str(row["店铺名称"])
-        counter[shop] = counter.get(shop, 0) + 1
+    counter = Counter(str(row["店铺名称"]) for row in detail_rows)
     return [
         {"店铺名称": shop, "未出现商品数": count}
-        for shop, count in sorted(counter.items(), key=lambda x: x[1], reverse=True)
+        for shop, count in sorted(counter.items(), key=lambda item: item[1], reverse=True)
     ]
 
 
@@ -262,11 +249,13 @@ def choose_latest_input_file(input_dir: Path, prefix: str) -> Path:
     return files[0]
 
 
-def main() -> None:
-    base_dir = Path(__file__).resolve().parents[1]
-    default_input_dir = base_dir / "data" / "input"
-    default_output = base_dir / "data" / "output" / "店铺未上架商品编码.xlsx"
+def resolve_input_file(file_path: Optional[str], input_dir: Path, prefix: str) -> Path:
+    if file_path:
+        return Path(file_path)
+    return choose_latest_input_file(input_dir, prefix)
 
+
+def build_parser(default_output: Path) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="按店铺找出未出现在店铺商品资料中的商品编码（精确匹配）")
     parser.add_argument("--shop-file", default=None, help="店铺商品资料文件路径，不传则自动从 data/input 选择最新文件")
     parser.add_argument("--catalog-file", default=None, help="商品资料文件路径，不传则自动从 data/input 选择最新文件")
@@ -277,17 +266,17 @@ def main() -> None:
     parser.add_argument("--shop-sku-col", default="原始商品编码", help="店铺商品编码列名")
     parser.add_argument("--catalog-sku-col", default="商品编码", help="商品资料编码列名")
     parser.add_argument("--time-col", default="创建时间", help="商品资料时间列名")
-    args = parser.parse_args()
+    return parser
 
-    if args.shop_file:
-        shop_file = Path(args.shop_file)
-    else:
-        shop_file = choose_latest_input_file(default_input_dir, "店铺商品资料")
 
-    if args.catalog_file:
-        catalog_file = Path(args.catalog_file)
-    else:
-        catalog_file = choose_latest_input_file(default_input_dir, "商品资料")
+def main() -> None:
+    base_dir = Path(__file__).resolve().parents[1]
+    default_input_dir = base_dir / "data" / "input"
+    default_output = base_dir / "data" / "output" / "店铺未上架商品编码.xlsx"
+
+    args = build_parser(default_output).parse_args()
+    shop_file = resolve_input_file(args.shop_file, default_input_dir, "店铺商品资料")
+    catalog_file = resolve_input_file(args.catalog_file, default_input_dir, "商品资料")
 
     output_path = Path(args.output)
 
