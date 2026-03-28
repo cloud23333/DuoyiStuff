@@ -65,7 +65,7 @@ def build_recommendations(
             zero_sold7_with_sold30_stockout_max_qty
         ),
     )
-    suggested_by_row, sku_order_limit_capped_lines = (
+    suggested_by_row, sku_order_limit_capped_lines, sku_limit_capped_rows = (
         _allocate_recommendation_quantities(
             order_lines=ordered_lines,
             key_states=key_states,
@@ -175,6 +175,7 @@ def build_recommendations(
         recommendations,
         order_lines=ordered_lines,
         keep_change_ratio=SMALL_CHANGE_KEEP_RATIO,
+        sku_limit_capped_rows=sku_limit_capped_rows,
     )
     threshold_stats = _flag_min_order_ship_qty(recommendations, min_order_ship_qty)
     _refresh_key_recommended_totals(recommendations)
@@ -462,10 +463,11 @@ def _allocate_recommendation_quantities(
     key_states: dict[tuple[str, str], KeyState],
     sales_by_key: dict[tuple[str, str], SalesRecord],
     sku_order_max_qty: dict[str, int],
-) -> tuple[dict[int, int], int]:
+) -> tuple[dict[int, int], int, set[int]]:
     suggested_by_row: dict[int, int] = {}
     order_sku_shipped_totals: dict[tuple[str, str], int] = defaultdict(int)
     capped_lines = 0
+    sku_limit_capped_rows: set[int] = set()
 
     grouped_lines: dict[tuple[str, str], list[OrderLine]] = defaultdict(list)
     for line in order_lines:
@@ -494,9 +496,10 @@ def _allocate_recommendation_quantities(
             suggested_by_row[line.row_number] = suggested_qty
             if was_capped:
                 capped_lines += 1
+                sku_limit_capped_rows.add(line.row_number)
             remaining -= suggested_qty
 
-    return suggested_by_row, capped_lines
+    return suggested_by_row, capped_lines, sku_limit_capped_rows
 
 
 def _allocation_sort_key(line: OrderLine) -> tuple[int, datetime, int]:
@@ -645,6 +648,7 @@ def _apply_small_change_keep_rule(
     *,
     order_lines: list[OrderLine],
     keep_change_ratio: float,
+    sku_limit_capped_rows: set[int],
 ) -> dict[str, int]:
     rows_by_number: dict[int, dict[str, object]] = {
         int(row["row_number"]): row for row in recommendations
@@ -667,6 +671,7 @@ def _apply_small_change_keep_rule(
             rows_by_number=rows_by_number,
             keep_change_ratio=keep_change_ratio,
             order_totals_before_small_change=order_totals_before_small_change,
+            sku_limit_capped_rows=sku_limit_capped_rows,
         )
 
     return {"small_change_kept_lines": kept_rows}
@@ -688,6 +693,7 @@ def _apply_small_change_keep_by_key(
     rows_by_number: dict[int, dict[str, object]],
     keep_change_ratio: float,
     order_totals_before_small_change: dict[str, int],
+    sku_limit_capped_rows: set[int],
 ) -> int:
     if not lines:
         return 0
@@ -698,6 +704,9 @@ def _apply_small_change_keep_by_key(
     }
     candidate_rows: list[int] = []
     for line in prioritized_lines:
+        # sku_order_max_qty constraint takes priority: never restore capped rows.
+        if line.row_number in sku_limit_capped_rows:
+            continue
         row = rows_by_number[line.row_number]
         suggested_qty = int(row["recommended_ship"])
         if line.quantity <= 0:
