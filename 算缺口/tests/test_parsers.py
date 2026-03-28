@@ -6,6 +6,7 @@ from shipment_planner.parsers import (
     has_target_tag,
     normalize_sku_code,
     parse_hot_style,
+    parse_order_time,
     parse_orders,
     parse_quantity_int,
     parse_sales,
@@ -149,20 +150,9 @@ def test_normalize_sku_code_removes_internal_spaces():
 # ---------------------------------------------------------------------------
 
 
-def test_parse_hot_style_returns_true_for_chinese_yes():
-    assert parse_hot_style("是") is True
-
-
-def test_parse_hot_style_returns_true_for_english_true():
-    assert parse_hot_style("true") is True
-
-
-def test_parse_hot_style_returns_true_for_string_one():
-    assert parse_hot_style("1") is True
-
-
-def test_parse_hot_style_returns_true_for_yes():
-    assert parse_hot_style("yes") is True
+@pytest.mark.parametrize("value", ["是", "true", "1", "yes"])
+def test_parse_hot_style_returns_true_for_truthy_values(value):
+    assert parse_hot_style(value) is True
 
 
 def test_parse_hot_style_returns_false_for_chinese_no():
@@ -233,7 +223,7 @@ def test_parse_orders_ignores_extra_columns():
 
 def test_parse_orders_raises_for_invalid_quantity():
     rows = [_make_order_row(数量="not_a_number")]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not a number"):
         parse_orders(rows)
 
 
@@ -242,6 +232,32 @@ def test_parse_orders_strips_whitespace_from_skc_and_skuid():
     lines, _ = parse_orders(rows)
     assert lines[0].skc == "SKC001"
     assert lines[0].skuid == "SKUID001"
+
+
+def test_parse_orders_in_progress_with_empty_address_falls_through_to_lines():
+    # status == IN_PROGRESS_STATUS but address is empty → should NOT go into
+    # in_progress dict; the row should be appended to lines instead.
+    rows = [_make_order_row(状态="发货中", 地址="")]
+    lines, in_progress = parse_orders(rows)
+    assert len(lines) == 1
+    assert in_progress == {}
+
+
+# ---------------------------------------------------------------------------
+# parse_order_time
+# ---------------------------------------------------------------------------
+
+
+def test_parse_order_time_parses_valid_datetime_string():
+    from datetime import datetime
+
+    result = parse_order_time("2024-01-15 10:30:00", row_number=2)
+    assert result == datetime(2024, 1, 15, 10, 30, 0)
+
+
+def test_parse_order_time_raises_for_empty_string():
+    with pytest.raises(ValueError, match="Missing 下单时间"):
+        parse_order_time("", row_number=3)
 
 
 # ---------------------------------------------------------------------------
@@ -298,3 +314,16 @@ def test_parse_sales_parses_stocking_days_correctly():
     rows = [_make_sales_row(**{"平台商品基本信息-备货逻辑": "3+4"})]
     records = parse_sales(rows)
     assert records[0].stocking_days == 7.0
+
+
+def test_parse_sales_handles_comma_formatted_numeric_fields():
+    # Values like "1,200" (thousands separator) should be parsed correctly.
+    rows = [_make_sales_row(**{
+        "销售数据-近30日销量": "1,200",
+        "销售数据-近7日销量": "2,500",
+        "平台商品库存信息-平台仓内库存": "3,000",
+    })]
+    records = parse_sales(rows)
+    assert records[0].sold30 == 1200
+    assert records[0].sold7 == 2500
+    assert records[0].stock_in_warehouse == 3000.0
