@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from shipment_planner.constraints import load_constraints, load_sku_order_max_qty
+from shipment_planner.engine import build_recommendations
+from shipment_planner.models import OrderLine, SalesRecord
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +120,7 @@ def test_load_constraints_comma_separated_exclude_skc_parsed_correctly(tmp_path:
     assert "SKC-001" in exclude_skc
     assert "SKC-002" in exclude_skc
     assert "SKC-003" in exclude_skc
+    assert len(exclude_skc) == 3
 
 
 def test_load_constraints_fullwidth_comma_in_exclude_skuid_parsed_correctly(
@@ -131,6 +135,7 @@ def test_load_constraints_fullwidth_comma_in_exclude_skuid_parsed_correctly(
     assert loaded is True
     assert "SKUID-A" in exclude_skuid
     assert "SKUID-B" in exclude_skuid
+    assert len(exclude_skuid) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -256,3 +261,112 @@ def test_load_constraints_root_array_raises(tmp_path: Path):
     f.write_text("[1, 2, 3]", encoding="utf-8")
     with pytest.raises(ValueError, match="root must be a JSON object"):
         load_constraints(f)
+
+
+# ---------------------------------------------------------------------------
+# load_constraints — fractional string rejected
+# ---------------------------------------------------------------------------
+
+
+def test_load_constraints_fractional_string_max_qty_raises(tmp_path: Path):
+    """A fractional string like '10.5' where an integer is expected should raise."""
+    f = tmp_path / "constraints.json"
+    f.write_text(
+        json.dumps({"sku_order_max_qty": {"SKU-FRAC": "10.5"}}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="must be an integer"):
+        load_constraints(f)
+
+
+# ---------------------------------------------------------------------------
+# build_recommendations — excluded SKU gets recommended_ship == 0
+# ---------------------------------------------------------------------------
+
+_ORDER_TIME = datetime(2024, 1, 1)
+
+
+def _make_order_line(
+    skc: str = "SKC-001",
+    skuid: str = "SKUID-001",
+    quantity: int = 50,
+    row_number: int = 1,
+) -> OrderLine:
+    return OrderLine(
+        row_number=row_number,
+        internal_order_id="ORD-001",
+        skc=skc,
+        skuid=skuid,
+        product_code="PROD-001",
+        order_sku="SKU-001",
+        status="pending",
+        order_time=_ORDER_TIME,
+        quantity=quantity,
+    )
+
+
+def _make_sales_record(
+    skc: str = "SKC-001",
+    skuid: str = "SKUID-001",
+    stock_in_warehouse: float = 0.0,
+    sold7: int = 10,
+    sold30: int = 40,
+) -> SalesRecord:
+    return SalesRecord(
+        row_number=1,
+        skc=skc,
+        skuid=skuid,
+        system_sku="SYS-SKU-001",
+        is_hot_style=False,
+        sold30=sold30,
+        sold7=sold7,
+        stocking_days=0.0,
+        stock_in_warehouse=stock_in_warehouse,
+        pending_receive=0.0,
+        pending_ship=0.0,
+    )
+
+
+def test_excluded_skuid_gets_zero_recommended_ship():
+    """An order line whose skuid is in exclude_skuid should have recommended_ship == 0."""
+    order_line = _make_order_line(skuid="SKUID-EXCLUDED", quantity=50)
+    sales_record = _make_sales_record(skuid="SKUID-EXCLUDED", stock_in_warehouse=0.0)
+
+    recommendations, _quality, _summary = build_recommendations(
+        order_lines=[order_line],
+        sales_records=[sales_record],
+        exclude_skuid={"SKUID-EXCLUDED"},
+    )
+
+    assert len(recommendations) == 1
+    assert recommendations[0]["recommended_ship"] == 0
+
+
+# ---------------------------------------------------------------------------
+# build_recommendations — end-to-end pipeline with max qty cap
+# ---------------------------------------------------------------------------
+
+
+def test_end_to_end_pipeline_max_qty_cap_applied(tmp_path: Path):
+    """Max qty cap from constraints file should limit recommended_ship."""
+    constraints_file = tmp_path / "shipment_constraints.json"
+    constraints_file.write_text(
+        json.dumps({"sku_order_max_qty": {"SKUID-CAP": 5}}), encoding="utf-8"
+    )
+
+    limits, exclude_skc, exclude_skuid, loaded = load_constraints(constraints_file)
+    assert loaded is True
+
+    # The normalized key is lowercased: "skuid-cap"
+    order_line = _make_order_line(skuid="skuid-cap", quantity=100)
+    sales_record = _make_sales_record(skuid="skuid-cap", stock_in_warehouse=0.0, sold7=20, sold30=80)
+
+    recommendations, _quality, _summary = build_recommendations(
+        order_lines=[order_line],
+        sales_records=[sales_record],
+        sku_order_max_qty=limits,
+        exclude_skc=exclude_skc,
+        exclude_skuid=exclude_skuid,
+    )
+
+    assert len(recommendations) == 1
+    assert recommendations[0]["recommended_ship"] <= 5
