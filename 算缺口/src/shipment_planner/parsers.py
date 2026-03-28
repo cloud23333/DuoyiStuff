@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from collections import defaultdict
 from datetime import datetime
+import functools
 import re
 from pathlib import Path
 from typing import TypeVar
@@ -60,7 +61,8 @@ def assert_required_columns(header: list[str], required: list[str], file_label: 
 
 
 def missing_required_columns(header: list[str], required: list[str]) -> list[str]:
-    return [column_name for column_name in required if column_name not in header]
+    header_set = set(header)
+    return [column_name for column_name in required if column_name not in header_set]
 
 
 def describe_required_column(column_name: str) -> str:
@@ -207,6 +209,7 @@ def has_target_tag(tags_value: str | None, target_tag: str) -> bool:
     return any(_clean_text(tag) == target_tag for tag in TAG_SPLIT_RE.split(tags_text))
 
 
+@functools.lru_cache(maxsize=None)
 def normalize_sku_code(value: str | None) -> str:
     return _normalize_plus_text(value).lower()
 

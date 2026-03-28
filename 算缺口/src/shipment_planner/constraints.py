@@ -38,6 +38,15 @@ def load_constraints(
     return limits, exclude_skc, exclude_skuid, True
 
 
+def load_sku_order_max_qty(
+    path: str | Path,
+    *,
+    strict: bool = False,
+) -> tuple[dict[str, int], bool]:
+    limits, _, _, loaded = load_constraints(path, strict=strict)
+    return limits, loaded
+
+
 def _parse_sku_order_max_qty(
     data: dict[str, object],
     constraints_path: Path,

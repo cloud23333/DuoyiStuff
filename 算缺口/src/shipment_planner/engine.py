@@ -1,12 +1,25 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from dataclasses import asdict
+from collections import defaultdict
 from datetime import datetime
 import math
 
+from .allocation import _allocate_recommendation_quantities
 from .models import KeyState, OrderLine, SalesRecord
-from .parsers import SHORTAGE_STATUS, normalize_sku_code
+from .parsers import normalize_sku_code
+from .post_processing import (
+    _apply_small_change_keep_rule,
+    _assign_order_decision_reasons,
+    _assign_order_intercept_warnings,
+    _decision_reason,
+    _flag_min_order_ship_qty,
+    _line_change_ratio,
+    _refresh_key_recommended_totals,
+    _refresh_line_decision_reasons,
+    _round_qty,
+    SALES_SPIKE_WARNING_DECISION,
+)
+from .summary import _build_summary
 
 DEFAULT_SOLD30_WEIGHT = 0.2
 DEFAULT_SOLD7_WEIGHT = 0.8
@@ -16,9 +29,6 @@ SOLD7_WINDOW_DAYS = 7.0
 HOT_STYLE_GAP_MULTIPLIER = 1.2
 DEFAULT_GLOBAL_GAP_MULTIPLIER = 1.0
 SMALL_CHANGE_KEEP_RATIO = 0.3
-SALES_SPIKE_MIN_SOLD30 = 30
-SALES_SPIKE_RATIO_THRESHOLD = 0.9
-SALES_SPIKE_WARNING_DECISION = "sales_spike_warning"
 
 
 def build_recommendations(
@@ -65,7 +75,7 @@ def build_recommendations(
             zero_sold7_with_sold30_stockout_max_qty
         ),
     )
-    suggested_by_row, sku_order_limit_capped_lines, sku_limit_capped_rows = (
+    suggested_by_row, sku_order_limit_capped_lines = (
         _allocate_recommendation_quantities(
             order_lines=ordered_lines,
             key_states=key_states,
@@ -175,7 +185,6 @@ def build_recommendations(
         recommendations,
         order_lines=ordered_lines,
         keep_change_ratio=SMALL_CHANGE_KEEP_RATIO,
-        sku_limit_capped_rows=sku_limit_capped_rows,
     )
     threshold_stats = _flag_min_order_ship_qty(recommendations, min_order_ship_qty)
     _refresh_key_recommended_totals(recommendations)
@@ -242,8 +251,8 @@ def _build_intercept_reason_by_row(
 ) -> dict[int, str]:
     reasons: dict[int, str] = {}
     for line in order_lines:
-        skc_hit = line.skc in exclude_skc
-        skuid_hit = line.skuid in exclude_skuid
+        skc_hit = line.skc.strip() in exclude_skc
+        skuid_hit = line.skuid.strip() in exclude_skuid
         if skc_hit and skuid_hit:
             reasons[line.row_number] = "skc_and_skuid"
         elif skc_hit:
@@ -350,26 +359,56 @@ def _quality_issue_row(
 def _build_sales_lookup(
     sales_records: list[SalesRecord],
 ) -> tuple[dict[tuple[str, str], SalesRecord], set[tuple[str, str]]]:
-    lookup: dict[tuple[str, str], SalesRecord] = {}
+    # Accumulate totals into plain intermediate dicts — never mutate SalesRecord instances
+    first_seen: dict[tuple[str, str], SalesRecord] = {}
+    accum: dict[tuple[str, str], dict] = {}
     duplicate_keys: set[tuple[str, str]] = set()
 
     for record in sales_records:
         key = (record.skc, record.skuid)
-        existing = lookup.get(key)
-        if existing is None:
-            lookup[key] = SalesRecord(**asdict(record))
-            continue
+        if key not in accum:
+            first_seen[key] = record
+            accum[key] = {
+                "sold30": record.sold30,
+                "sold7": record.sold7,
+                "stocking_days": record.stocking_days,
+                "stock_in_warehouse": record.stock_in_warehouse,
+                "pending_receive": record.pending_receive,
+                "pending_ship": record.pending_ship,
+                "is_hot_style": record.is_hot_style,
+                "system_sku": record.system_sku,
+            }
+        else:
+            duplicate_keys.add(key)
+            acc = accum[key]
+            accum[key] = {
+                "sold30": acc["sold30"] + record.sold30,
+                "sold7": acc["sold7"] + record.sold7,
+                "stocking_days": max(acc["stocking_days"], record.stocking_days),
+                "stock_in_warehouse": acc["stock_in_warehouse"] + record.stock_in_warehouse,
+                "pending_receive": acc["pending_receive"] + record.pending_receive,
+                "pending_ship": acc["pending_ship"] + record.pending_ship,
+                "is_hot_style": acc["is_hot_style"] or record.is_hot_style,
+                "system_sku": acc["system_sku"] if acc["system_sku"] else record.system_sku,
+            }
 
-        duplicate_keys.add(key)
-        existing.sold30 += record.sold30
-        existing.sold7 += record.sold7
-        existing.stocking_days = max(existing.stocking_days, record.stocking_days)
-        existing.stock_in_warehouse += record.stock_in_warehouse
-        existing.pending_receive += record.pending_receive
-        existing.pending_ship += record.pending_ship
-        existing.is_hot_style = existing.is_hot_style or record.is_hot_style
-        if not existing.system_sku and record.system_sku:
-            existing.system_sku = record.system_sku
+    # Construct new SalesRecord instances from accumulated data
+    lookup: dict[tuple[str, str], SalesRecord] = {
+        key: SalesRecord(
+            row_number=first_seen[key].row_number,
+            skc=first_seen[key].skc,
+            skuid=first_seen[key].skuid,
+            sold30=acc["sold30"],
+            sold7=acc["sold7"],
+            stocking_days=acc["stocking_days"],
+            stock_in_warehouse=acc["stock_in_warehouse"],
+            pending_receive=acc["pending_receive"],
+            pending_ship=acc["pending_ship"],
+            is_hot_style=acc["is_hot_style"],
+            system_sku=acc["system_sku"],
+        )
+        for key, acc in accum.items()
+    }
 
     return lookup, duplicate_keys
 
@@ -458,497 +497,4 @@ def _target_ship_qty(
     return (sold30_daily + sold7_daily) * stocking_days
 
 
-def _allocate_recommendation_quantities(
-    order_lines: list[OrderLine],
-    key_states: dict[tuple[str, str], KeyState],
-    sales_by_key: dict[tuple[str, str], SalesRecord],
-    sku_order_max_qty: dict[str, int],
-) -> tuple[dict[int, int], int, set[int]]:
-    suggested_by_row: dict[int, int] = {}
-    order_sku_shipped_totals: dict[tuple[str, str], int] = defaultdict(int)
-    capped_lines = 0
-    sku_limit_capped_rows: set[int] = set()
 
-    grouped_lines: dict[tuple[str, str], list[OrderLine]] = defaultdict(list)
-    for line in order_lines:
-        grouped_lines[(line.skc, line.skuid)].append(line)
-
-    for key, lines in grouped_lines.items():
-        state = key_states.get(key)
-        if state is None:
-            for line in lines:
-                suggested_by_row[line.row_number] = 0
-            continue
-
-        remaining = state.recommended_qty_total
-        sales = sales_by_key.get(key)
-        system_sku = sales.system_sku if sales is not None else ""
-
-        for line in sorted(lines, key=_allocation_sort_key):
-            base_suggested_qty = min(line.quantity, remaining)
-            suggested_qty, was_capped = _apply_order_sku_limit(
-                suggested_qty=base_suggested_qty,
-                line=line,
-                system_sku=system_sku,
-                sku_order_max_qty=sku_order_max_qty,
-                order_sku_shipped_totals=order_sku_shipped_totals,
-            )
-            suggested_by_row[line.row_number] = suggested_qty
-            if was_capped:
-                capped_lines += 1
-                sku_limit_capped_rows.add(line.row_number)
-            remaining -= suggested_qty
-
-    return suggested_by_row, capped_lines, sku_limit_capped_rows
-
-
-def _allocation_sort_key(line: OrderLine) -> tuple[int, datetime, int]:
-    # Reduce "缺货" first when supply is insufficient.
-    status_priority = 1 if line.status == SHORTAGE_STATUS else 0
-    return (status_priority, line.order_time, line.row_number)
-
-
-def _decision_reason(line_qty: int, suggested_qty: int) -> str:
-    if suggested_qty <= 0:
-        return "hold"
-    if suggested_qty >= line_qty:
-        return "ship_all"
-    return "ship_partial"
-
-
-def _assign_order_decision_reasons(
-    recommendations: list[dict[str, object]],
-    order_lines: list[OrderLine],
-) -> None:
-    order_qty_totals = _sum_order_qty_by_order_id(order_lines)
-    order_recommended_totals = _sum_recommended_by_order(recommendations)
-    order_all_sales_spike_warning = _order_all_sales_spike_warning(recommendations)
-
-    for row in recommendations:
-        order_id = str(row["internal_order_id"])
-        base_order_decision = _decision_reason(
-            order_qty_totals.get(order_id, 0),
-            order_recommended_totals.get(order_id, 0),
-        )
-        if order_all_sales_spike_warning.get(order_id, False):
-            row["order_decision_reason"] = SALES_SPIKE_WARNING_DECISION
-            continue
-        row["order_decision_reason"] = base_order_decision
-
-
-def _is_sales_spike_warning(sold30: int, sold7: int) -> bool:
-    if sold30 < SALES_SPIKE_MIN_SOLD30:
-        return False
-    if sold30 <= 0:
-        return False
-    return (sold7 / sold30) >= SALES_SPIKE_RATIO_THRESHOLD
-
-
-def _sum_order_qty_by_order_id(order_lines: list[OrderLine]) -> dict[str, int]:
-    totals: dict[str, int] = defaultdict(int)
-    for line in order_lines:
-        totals[line.internal_order_id] += line.quantity
-    return dict(totals)
-
-
-def _sum_recommended_by_order(
-    recommendations: list[dict[str, object]],
-) -> dict[str, int]:
-    totals: dict[str, int] = defaultdict(int)
-    for row in recommendations:
-        totals[str(row["internal_order_id"])] += int(row["recommended_ship"])
-    return dict(totals)
-
-
-def _order_all_sales_spike_warning(
-    recommendations: list[dict[str, object]],
-) -> dict[str, bool]:
-    order_all_warning: dict[str, bool] = {}
-    for row in recommendations:
-        order_id = str(row["internal_order_id"])
-        is_warning = (
-            str(row.get("decision_reason", "")) == SALES_SPIKE_WARNING_DECISION
-        )
-        if order_id not in order_all_warning:
-            order_all_warning[order_id] = is_warning
-            continue
-        order_all_warning[order_id] = order_all_warning[order_id] and is_warning
-    return order_all_warning
-
-
-def _recommendation_key(row: dict[str, object]) -> tuple[str, str]:
-    return (str(row["店铺款式编码"]), str(row["店铺商品编码"]))
-
-
-def _refresh_key_recommended_totals(recommendations: list[dict[str, object]]) -> None:
-    key_totals: dict[tuple[str, str], int] = defaultdict(int)
-    for row in recommendations:
-        key = _recommendation_key(row)
-        key_totals[key] += int(row["recommended_ship"])
-
-    for row in recommendations:
-        key = _recommendation_key(row)
-        row["key_recommended_total"] = key_totals.get(key, 0)
-
-
-def _refresh_line_decision_reasons(recommendations: list[dict[str, object]]) -> None:
-    for row in recommendations:
-        base_decision = _decision_reason(
-            int(row["line_order_qty"]),
-            int(row["recommended_ship"]),
-        )
-        if _is_sales_spike_warning(int(row["sold30"]), int(row["sold7"])):
-            row["decision_reason"] = SALES_SPIKE_WARNING_DECISION
-            continue
-        row["decision_reason"] = base_decision
-
-
-def _assign_order_intercept_warnings(
-    recommendations: list[dict[str, object]],
-    *,
-    suggested_by_row_before_intercept: dict[int, int],
-) -> dict[str, int]:
-    order_totals_after: dict[str, int] = defaultdict(int)
-    order_totals_before: dict[str, int] = defaultdict(int)
-    order_has_intercept: dict[str, bool] = defaultdict(bool)
-    for row in recommendations:
-        order_id = str(row["internal_order_id"])
-        row_number = int(row["row_number"])
-        order_totals_after[order_id] += int(row["recommended_ship"])
-        order_totals_before[order_id] += suggested_by_row_before_intercept.get(
-            row_number, 0
-        )
-        if str(row.get("intercept_reason", "")):
-            order_has_intercept[order_id] = True
-
-    intercepted_orders = {
-        order_id
-        for order_id, total_after in order_totals_after.items()
-        if total_after <= 0
-        and order_totals_before.get(order_id, 0) > 0
-        and order_has_intercept.get(order_id, False)
-    }
-
-    flagged_lines = 0
-    for row in recommendations:
-        order_id = str(row["internal_order_id"])
-        is_intercepted_order = order_id in intercepted_orders
-        row["order_intercept_warning"] = "yes" if is_intercepted_order else "no"
-        if is_intercepted_order:
-            flagged_lines += 1
-
-    return {
-        "intercepted_orders": len(intercepted_orders),
-        "intercepted_order_lines": flagged_lines,
-    }
-
-
-def _apply_small_change_keep_rule(
-    recommendations: list[dict[str, object]],
-    *,
-    order_lines: list[OrderLine],
-    keep_change_ratio: float,
-    sku_limit_capped_rows: set[int],
-) -> dict[str, int]:
-    rows_by_number: dict[int, dict[str, object]] = {
-        int(row["row_number"]): row for row in recommendations
-    }
-
-    for row in recommendations:
-        _initialize_small_change_fields(row)
-
-    order_totals_before_small_change = _sum_recommended_by_order(recommendations)
-
-    grouped_lines: dict[tuple[str, str], list[OrderLine]] = defaultdict(list)
-    for line in order_lines:
-        if line.row_number in rows_by_number:
-            grouped_lines[(line.skc, line.skuid)].append(line)
-
-    kept_rows = 0
-    for lines in grouped_lines.values():
-        kept_rows += _apply_small_change_keep_by_key(
-            lines=lines,
-            rows_by_number=rows_by_number,
-            keep_change_ratio=keep_change_ratio,
-            order_totals_before_small_change=order_totals_before_small_change,
-            sku_limit_capped_rows=sku_limit_capped_rows,
-        )
-
-    return {"small_change_kept_lines": kept_rows}
-
-
-def _initialize_small_change_fields(row: dict[str, object]) -> None:
-    line_qty = int(row["line_order_qty"])
-    suggested_qty = int(row["recommended_ship"])
-    row["recommended_ship_before_small_change_rule"] = suggested_qty
-    row["small_change_ratio_before_rule"] = _round_qty(
-        _line_change_ratio(line_qty, suggested_qty)
-    )
-    row["small_change_keep_warning"] = "no"
-
-
-def _apply_small_change_keep_by_key(
-    *,
-    lines: list[OrderLine],
-    rows_by_number: dict[int, dict[str, object]],
-    keep_change_ratio: float,
-    order_totals_before_small_change: dict[str, int],
-    sku_limit_capped_rows: set[int],
-) -> int:
-    if not lines:
-        return 0
-
-    prioritized_lines = sorted(lines, key=_allocation_sort_key)
-    allocation_rank = {
-        line.row_number: idx for idx, line in enumerate(prioritized_lines)
-    }
-    candidate_rows: list[int] = []
-    for line in prioritized_lines:
-        # sku_order_max_qty constraint takes priority: never restore capped rows.
-        if line.row_number in sku_limit_capped_rows:
-            continue
-        row = rows_by_number[line.row_number]
-        suggested_qty = int(row["recommended_ship"])
-        if line.quantity <= 0:
-            continue
-        if suggested_qty >= line.quantity:
-            continue
-
-        change_ratio = _line_change_ratio(line.quantity, suggested_qty)
-        if change_ratio <= keep_change_ratio:
-            candidate_rows.append(line.row_number)
-
-    if not candidate_rows:
-        return 0
-
-    # Keep deterministic trigger order for reporting consistency.
-    candidate_rows.sort(
-        key=lambda row_number: (
-            -order_totals_before_small_change.get(
-                str(rows_by_number[row_number]["internal_order_id"]),
-                0,
-            ),
-            allocation_rank.get(row_number, 0),
-            row_number,
-        )
-    )
-    locked_rows: set[int] = set()
-    kept_rows = 0
-
-    for candidate_row_number in candidate_rows:
-        candidate_row = rows_by_number[candidate_row_number]
-        line_qty = int(candidate_row["line_order_qty"])
-        _mark_small_change_kept(
-            candidate_row,
-            line_qty=line_qty,
-            row_number=candidate_row_number,
-            locked_rows=locked_rows,
-        )
-        kept_rows += 1
-
-    return kept_rows
-
-
-def _mark_small_change_kept(
-    row: dict[str, object],
-    *,
-    line_qty: int,
-    row_number: int,
-    locked_rows: set[int],
-) -> None:
-    row["recommended_ship"] = line_qty
-    row["small_change_keep_warning"] = "yes"
-    locked_rows.add(row_number)
-
-
-def _build_summary(
-    order_lines: list[OrderLine],
-    sales_records: list[SalesRecord],
-    recommendations: list[dict[str, object]],
-    quality_rows: list[dict[str, object]],
-    duplicate_keys: set[tuple[str, str]],
-    min_order_ship_qty: int,
-    threshold_stats: dict[str, int],
-    sku_order_limit_rule_count: int,
-    sku_order_limit_capped_lines: int,
-    excluded_skc_rule_count: int,
-    excluded_skuid_rule_count: int,
-    intercepted_order_lines: int,
-    intercepted_orders: int,
-    small_change_kept_lines: int,
-    global_gap_multiplier: float,
-    sold30_weight: float,
-    sold7_weight: float,
-    zero_sold7_with_sold30_stockout_max_qty: int,
-) -> dict[str, object]:
-    order_line_count = len(order_lines)
-    matched_count = sum(
-        1 for row in recommendations if row["sku_code_check"] != "missing_key"
-    )
-    decision_counter = Counter(str(row["decision_reason"]) for row in recommendations)
-    sku_check_counter = Counter(str(row["sku_code_check"]) for row in recommendations)
-    join_coverage_pct = (
-        (matched_count / order_line_count * 100) if order_line_count else 0.0
-    )
-    total_order_qty = sum(line.quantity for line in order_lines)
-    total_recommended_qty = sum(int(row["recommended_ship"]) for row in recommendations)
-
-    return {
-        "order_lines": order_line_count,
-        "sales_rows": len(sales_records),
-        "matched_order_lines": matched_count,
-        "join_coverage_pct": _round_qty(join_coverage_pct),
-        "total_order_qty": total_order_qty,
-        "total_recommended_qty": total_recommended_qty,
-        "decision_ship_all": decision_counter.get("ship_all", 0),
-        "decision_ship_partial": decision_counter.get("ship_partial", 0),
-        "decision_hold": decision_counter.get("hold", 0),
-        "sku_check_exact_match": sku_check_counter.get("exact_match", 0),
-        "sku_check_normalized_match": sku_check_counter.get("normalized_match", 0),
-        "sku_check_diff": sku_check_counter.get("diff", 0),
-        "sku_check_missing_key": sku_check_counter.get("missing_key", 0),
-        "quality_issue_rows": len(quality_rows),
-        "duplicate_sales_keys": len(duplicate_keys),
-        "min_order_ship_qty_threshold": min_order_ship_qty,
-        "low_qty_orders": threshold_stats.get("low_qty_orders", 0),
-        "low_qty_order_lines": threshold_stats.get("low_qty_order_lines", 0),
-        "sku_order_limit_rule_count": sku_order_limit_rule_count,
-        "sku_order_limit_capped_lines": sku_order_limit_capped_lines,
-        "excluded_skc_rule_count": excluded_skc_rule_count,
-        "excluded_skuid_rule_count": excluded_skuid_rule_count,
-        "intercepted_order_lines": intercepted_order_lines,
-        "intercepted_orders": intercepted_orders,
-        "small_change_kept_lines": small_change_kept_lines,
-        "global_gap_multiplier": _round_qty(global_gap_multiplier),
-        "sold30_weight": _round_qty(sold30_weight),
-        "sold7_weight": _round_qty(sold7_weight),
-        "zero_sold7_with_sold30_stockout_max_qty": (
-            zero_sold7_with_sold30_stockout_max_qty
-        ),
-        "low_qty_orders_before_exempt": threshold_stats.get(
-            "low_qty_orders_before_exempt",
-            0,
-        ),
-        "low_qty_order_lines_before_exempt": threshold_stats.get(
-            "low_qty_order_lines_before_exempt",
-            0,
-        ),
-        "low_qty_orders_exempted": threshold_stats.get("low_qty_orders_exempted", 0),
-        "low_qty_order_lines_exempted": threshold_stats.get(
-            "low_qty_order_lines_exempted",
-            0,
-        ),
-    }
-
-
-def _round_qty(value: float) -> float:
-    return round(value, 4)
-
-
-def _line_change_ratio(line_qty: float, suggested_qty: float) -> float:
-    if line_qty <= 0:
-        return 0.0
-    return abs(suggested_qty - line_qty) / line_qty
-
-
-def _apply_order_sku_limit(
-    suggested_qty: int,
-    line: OrderLine,
-    system_sku: str,
-    sku_order_max_qty: dict[str, int],
-    order_sku_shipped_totals: dict[tuple[str, str], int],
-) -> tuple[int, bool]:
-    constraint_sku = _pick_matching_constraint_sku(
-        line.order_sku, system_sku, sku_order_max_qty
-    )
-    if not constraint_sku:
-        return suggested_qty, False
-
-    limit = sku_order_max_qty[constraint_sku]
-    order_key = (line.internal_order_id, constraint_sku)
-    already_suggested = order_sku_shipped_totals.get(order_key, 0)
-    remaining_allowed = max(0, limit - already_suggested)
-    capped_qty = min(suggested_qty, remaining_allowed)
-    order_sku_shipped_totals[order_key] = already_suggested + capped_qty
-    was_capped = capped_qty < suggested_qty
-    return capped_qty, was_capped
-
-
-def _pick_matching_constraint_sku(
-    order_sku: str,
-    system_sku: str,
-    sku_order_max_qty: dict[str, int],
-) -> str:
-    for raw_sku in (order_sku, system_sku):
-        normalized_sku = normalize_sku_code(raw_sku)
-        if normalized_sku in sku_order_max_qty:
-            return normalized_sku
-    return ""
-
-
-def _flag_min_order_ship_qty(
-    recommendations: list[dict[str, object]],
-    min_order_ship_qty: int,
-) -> dict[str, int]:
-    order_totals = _sum_recommended_by_order(recommendations)
-    low_qty_orders: set[str] = set()
-    if min_order_ship_qty > 0:
-        low_qty_orders = {
-            order_id
-            for order_id, total in order_totals.items()
-            if 0 < total < min_order_ship_qty
-        }
-
-    flagged_lines = 0
-    affected_orders: set[str] = set()
-    exempted_lines = 0
-    exempted_orders: set[str] = set()
-    low_qty_lines_before_exempt = 0
-    for row in recommendations:
-        order_id = str(row["internal_order_id"])
-        before_total = order_totals.get(order_id, 0)
-        row["order_recommended_ship_total_before_threshold"] = before_total
-        row["min_order_ship_qty_threshold"] = min_order_ship_qty
-        is_low_qty_order = order_id in low_qty_orders
-        if is_low_qty_order:
-            low_qty_lines_before_exempt += 1
-
-        is_min_order_ship_qty_exempt_eligible = bool(
-            row.get("min_order_ship_qty_exempt_eligible", False)
-        )
-        should_block_by_threshold = (
-            is_low_qty_order and not is_min_order_ship_qty_exempt_eligible
-        )
-        should_apply_exemption = (
-            is_low_qty_order and is_min_order_ship_qty_exempt_eligible
-        )
-        row["order_low_qty_warning"] = "yes" if should_block_by_threshold else "no"
-        row["min_order_ship_qty_exempt_eligible"] = (
-            is_min_order_ship_qty_exempt_eligible
-        )
-        row["min_order_ship_qty_exempt_applied"] = should_apply_exemption
-        row["min_order_ship_qty_exempt_warning"] = (
-            "yes" if is_min_order_ship_qty_exempt_eligible else "no"
-        )
-        row["min_order_ship_qty_exempt_applied_warning"] = (
-            "yes" if should_apply_exemption else "no"
-        )
-
-        if should_apply_exemption:
-            exempted_lines += 1
-            exempted_orders.add(order_id)
-            continue
-        if not should_block_by_threshold:
-            continue
-        row["recommended_ship"] = 0
-        flagged_lines += 1
-        affected_orders.add(order_id)
-
-    return {
-        "low_qty_orders_before_exempt": len(low_qty_orders),
-        "low_qty_order_lines_before_exempt": low_qty_lines_before_exempt,
-        "low_qty_orders": len(affected_orders),
-        "low_qty_order_lines": flagged_lines,
-        "low_qty_orders_exempted": len(exempted_orders),
-        "low_qty_order_lines_exempted": exempted_lines,
-    }
