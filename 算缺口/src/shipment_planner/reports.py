@@ -245,15 +245,8 @@ def _localize_summary(summary: dict[str, object]) -> dict[str, object]:
 
 
 def _format_int_like(value: object) -> object:
-    text = str(value).strip()
-    if text == "":
-        return value
-    try:
-        parsed = float(text)
-    except ValueError:
-        return value
-    if parsed.is_integer():
-        return int(parsed)
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
     return value
 
 

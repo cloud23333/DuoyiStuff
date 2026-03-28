@@ -251,8 +251,8 @@ def _build_intercept_reason_by_row(
 ) -> dict[int, str]:
     reasons: dict[int, str] = {}
     for line in order_lines:
-        skc_hit = line.skc in exclude_skc
-        skuid_hit = line.skuid in exclude_skuid
+        skc_hit = line.skc.strip() in exclude_skc
+        skuid_hit = line.skuid.strip() in exclude_skuid
         if skc_hit and skuid_hit:
             reasons[line.row_number] = "skc_and_skuid"
         elif skc_hit:
