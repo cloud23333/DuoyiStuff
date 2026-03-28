@@ -349,26 +349,56 @@ def _quality_issue_row(
 def _build_sales_lookup(
     sales_records: list[SalesRecord],
 ) -> tuple[dict[tuple[str, str], SalesRecord], set[tuple[str, str]]]:
-    lookup: dict[tuple[str, str], SalesRecord] = {}
+    # Accumulate totals into plain intermediate dicts — never mutate SalesRecord instances
+    first_seen: dict[tuple[str, str], SalesRecord] = {}
+    accum: dict[tuple[str, str], dict] = {}
     duplicate_keys: set[tuple[str, str]] = set()
 
     for record in sales_records:
         key = (record.skc, record.skuid)
-        existing = lookup.get(key)
-        if existing is None:
-            lookup[key] = SalesRecord(**asdict(record))
-            continue
+        if key not in accum:
+            first_seen[key] = record
+            accum[key] = {
+                "sold30": record.sold30,
+                "sold7": record.sold7,
+                "stocking_days": record.stocking_days,
+                "stock_in_warehouse": record.stock_in_warehouse,
+                "pending_receive": record.pending_receive,
+                "pending_ship": record.pending_ship,
+                "is_hot_style": record.is_hot_style,
+                "system_sku": record.system_sku,
+            }
+        else:
+            duplicate_keys.add(key)
+            acc = accum[key]
+            accum[key] = {
+                "sold30": acc["sold30"] + record.sold30,
+                "sold7": acc["sold7"] + record.sold7,
+                "stocking_days": max(acc["stocking_days"], record.stocking_days),
+                "stock_in_warehouse": acc["stock_in_warehouse"] + record.stock_in_warehouse,
+                "pending_receive": acc["pending_receive"] + record.pending_receive,
+                "pending_ship": acc["pending_ship"] + record.pending_ship,
+                "is_hot_style": acc["is_hot_style"] or record.is_hot_style,
+                "system_sku": acc["system_sku"] if acc["system_sku"] else record.system_sku,
+            }
 
-        duplicate_keys.add(key)
-        existing.sold30 += record.sold30
-        existing.sold7 += record.sold7
-        existing.stocking_days = max(existing.stocking_days, record.stocking_days)
-        existing.stock_in_warehouse += record.stock_in_warehouse
-        existing.pending_receive += record.pending_receive
-        existing.pending_ship += record.pending_ship
-        existing.is_hot_style = existing.is_hot_style or record.is_hot_style
-        if not existing.system_sku and record.system_sku:
-            existing.system_sku = record.system_sku
+    # Construct new SalesRecord instances from accumulated data
+    lookup: dict[tuple[str, str], SalesRecord] = {
+        key: SalesRecord(
+            row_number=first_seen[key].row_number,
+            skc=first_seen[key].skc,
+            skuid=first_seen[key].skuid,
+            sold30=acc["sold30"],
+            sold7=acc["sold7"],
+            stocking_days=acc["stocking_days"],
+            stock_in_warehouse=acc["stock_in_warehouse"],
+            pending_receive=acc["pending_receive"],
+            pending_ship=acc["pending_ship"],
+            is_hot_style=acc["is_hot_style"],
+            system_sku=acc["system_sku"],
+        )
+        for key, acc in accum.items()
+    }
 
     return lookup, duplicate_keys
 
