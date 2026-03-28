@@ -39,3 +39,6 @@ data/output/
 # Markdown docs: keep only README.md
 *.md
 !README.md
+
+# Git worktrees
+.worktrees/
