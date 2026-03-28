@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from datetime import datetime
 
 import pytest
@@ -210,6 +209,30 @@ class TestBuildKeyStates:
         assert states[key].gap == 0
         assert states[key].recommended_qty_total == 0
 
+    def test_shipping_in_progress_reduces_gap(self) -> None:
+        key = ("SKC_IP", "SKUID_IP")
+        # With zero stock and positive demand, there should be a gap.
+        # Adding shipping_in_progress increases available_stock, reducing the gap.
+        sales = make_sales_record(
+            skc="SKC_IP", skuid="SKUID_IP",
+            sold30=300, sold7=70, stocking_days=7.0,
+            stock_in_warehouse=0.0, pending_receive=0.0, pending_ship=0.0,
+            is_hot_style=False,
+        )
+        states_no_progress = self._run(
+            key_demand={key: 1000},
+            sales_by_key={key: sales},
+            shipping_in_progress_by_key={},
+        )
+        states_with_progress = self._run(
+            key_demand={key: 1000},
+            sales_by_key={key: sales},
+            shipping_in_progress_by_key={key: 50},
+        )
+        gap_no_progress = states_no_progress[key].gap
+        gap_with_progress = states_with_progress[key].gap
+        assert gap_with_progress < gap_no_progress
+
     def test_hot_style_multiplier_applied(self) -> None:
         key = ("SKC_HOT", "SKUID_HOT")
         # Use a simple case where the gap is clearly computable.
@@ -261,7 +284,9 @@ class TestLineChangeRatio:
         ratio = _line_change_ratio(10, 7)
         assert abs(ratio - 0.3) < 1e-9
 
-    def test_100_percent_increase(self) -> None:
+    def test_doubled_quantity_gives_ratio_one(self) -> None:
+        # The formula uses abs(original - new) / original, so doubling (5→10)
+        # gives abs(5-10)/5 = 1.0, the same ratio as a full reduction (10→0).
         ratio = _line_change_ratio(5, 10)
         assert abs(ratio - 1.0) < 1e-9
 
@@ -294,12 +319,30 @@ class TestDecisionReason:
 
 
 class TestZeroGapAllocation:
-    def test_zero_gap_sku_gets_zero_recommended(self) -> None:
-        # Plenty of stock -> target_ship_qty will be low -> gap = 0
+    def test_zero_gap_sku_gets_zero_recommended_zero_demand(self) -> None:
+        # Zero demand (sold30=0, sold7=0) causes target_ship_qty=0,
+        # which causes gap=0 regardless of stock level.
         order = make_order_line(quantity=20)
         sales = make_sales_record(
             sold30=0, sold7=0, stocking_days=7.0,
             stock_in_warehouse=1000.0, pending_receive=0.0, pending_ship=0.0,
+        )
+        recs, _, _ = build_recommendations(
+            order_lines=[order],
+            sales_records=[sales],
+            min_order_ship_qty=1,
+        )
+        assert len(recs) == 1
+        assert recs[0]["recommended_ship"] == 0
+        assert recs[0]["gap"] == 0
+
+    def test_zero_gap_sku_gets_zero_recommended_stock_surplus(self) -> None:
+        # Positive demand but large stock surplus: available_stock > target_ship_qty,
+        # so raw_gap clamps to 0 and nothing is recommended.
+        order = make_order_line(quantity=20)
+        sales = make_sales_record(
+            sold30=30, sold7=10, stocking_days=7.0,
+            stock_in_warehouse=10000.0, pending_receive=0.0, pending_ship=0.0,
         )
         recs, _, _ = build_recommendations(
             order_lines=[order],
