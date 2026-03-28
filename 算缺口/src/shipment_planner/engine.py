@@ -4,13 +4,9 @@ from collections import Counter, defaultdict
 from datetime import datetime
 import math
 
-from .allocation import (
-    _allocate_recommendation_quantities,
-    _apply_order_sku_limit,
-    _pick_matching_constraint_sku,
-)
+from .allocation import _allocate_recommendation_quantities
 from .models import KeyState, OrderLine, SalesRecord
-from .parsers import SHORTAGE_STATUS, normalize_sku_code
+from .parsers import normalize_sku_code
 from .post_processing import (
     _apply_small_change_keep_rule,
     _assign_order_decision_reasons,
