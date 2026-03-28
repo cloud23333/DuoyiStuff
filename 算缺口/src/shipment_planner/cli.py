@@ -23,7 +23,8 @@ from .parsers import (
 from .reports import export_reports
 from .xlsx_reader import read_xlsx_table
 
-HeaderCache: TypeAlias = dict[Path, list[str] | None]
+_XlsxData: TypeAlias = tuple[list[str], list[dict[str, str]]]
+HeaderCache: TypeAlias = dict[Path, _XlsxData | None]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -115,8 +116,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.sales is None:
         print(f"Auto-selected sales file: {sales_path}")
 
-    order_header, order_rows = read_xlsx_table(orders_path)
-    sales_header, sales_rows = read_xlsx_table(sales_path)
+    cached_orders = header_cache.get(orders_path)
+    order_header, order_rows = cached_orders if cached_orders is not None else read_xlsx_table(orders_path)
+    cached_sales = header_cache.get(sales_path)
+    sales_header, sales_rows = cached_sales if cached_sales is not None else read_xlsx_table(sales_path)
 
     assert_required_columns(order_header, ORDER_REQUIRED_COLUMNS, "orders file")
     assert_required_columns(sales_header, SALES_REQUIRED_COLUMNS, "sales file")
@@ -209,15 +212,16 @@ def _resolve_input_path(
 
 def _cached_header(path: Path, header_cache: HeaderCache) -> list[str] | None:
     if path in header_cache:
-        return header_cache[path]
+        cached = header_cache[path]
+        return cached[0] if cached is not None else None
 
     try:
-        header, _ = read_xlsx_table(path)
+        header, rows = read_xlsx_table(path)
     except Exception:
         header_cache[path] = None
         return None
 
-    header_cache[path] = header
+    header_cache[path] = (header, rows)
     return header
 
 
