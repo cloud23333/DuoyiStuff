@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
 import math
 
 from .allocation import _allocate_recommendation_quantities
@@ -17,13 +16,13 @@ from .post_processing import (
     _refresh_key_recommended_totals,
     _refresh_line_decision_reasons,
     _round_qty,
-    SALES_SPIKE_WARNING_DECISION,
 )
 from .summary import _build_summary
 
 DEFAULT_SOLD30_WEIGHT = 0.2
 DEFAULT_SOLD7_WEIGHT = 0.8
 DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY = 5
+DEFAULT_TREND_RECENT_DAYS = 3
 SOLD30_WINDOW_DAYS = 30.0
 SOLD7_WINDOW_DAYS = 7.0
 HOT_STYLE_GAP_MULTIPLIER = 1.2
@@ -45,6 +44,8 @@ def build_recommendations(
     global_gap_multiplier: float = DEFAULT_GLOBAL_GAP_MULTIPLIER,
     sold30_weight: float = DEFAULT_SOLD30_WEIGHT,
     sold7_weight: float = DEFAULT_SOLD7_WEIGHT,
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None = None,
+    trend_recent_days: int = DEFAULT_TREND_RECENT_DAYS,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
     if global_gap_multiplier <= 0:
         raise ValueError("global_gap_multiplier must be greater than 0.")
@@ -74,6 +75,8 @@ def build_recommendations(
         zero_sold7_with_sold30_stockout_max_qty=(
             zero_sold7_with_sold30_stockout_max_qty
         ),
+        daily_sales_by_key=daily_sales_by_key or {},
+        trend_recent_days=trend_recent_days,
     )
     suggested_by_row, sku_order_limit_capped_lines = (
         _allocate_recommendation_quantities(
@@ -428,6 +431,8 @@ def _build_key_states(
     sold30_weight: float,
     sold7_weight: float,
     zero_sold7_with_sold30_stockout_max_qty: int,
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
+    trend_recent_days: int,
 ) -> dict[tuple[str, str], KeyState]:
     states: dict[tuple[str, str], KeyState] = {}
     for key, order_qty_total in key_demand.items():
@@ -446,9 +451,11 @@ def _build_key_states(
             continue
 
         shipping_in_progress = shipping_in_progress_by_key.get(key, 0)
+        daily_sales = daily_sales_by_key.get(key, ())
+        effective_sold7 = _trend_adjusted_sold7(sales.sold7, daily_sales, trend_recent_days)
         target_ship_qty = _target_ship_qty(
             sold30=sales.sold30,
-            sold7=sales.sold7,
+            sold7=effective_sold7,
             stocking_days=sales.stocking_days,
             sold30_weight=sold30_weight,
             sold7_weight=sold7_weight,
@@ -466,7 +473,7 @@ def _build_key_states(
         gap = math.ceil(raw_gap)
         recommended_qty_total = min(order_qty_total, gap)
         is_min_order_ship_qty_exempt_eligible = (
-            sales.sold7 == 0 and sales.sold30 > 0 and available_stock == 0
+            effective_sold7 == 0 and sales.sold30 > 0 and available_stock == 0
         )
         if is_min_order_ship_qty_exempt_eligible:
             recommended_qty_total = min(
@@ -483,6 +490,25 @@ def _build_key_states(
             min_order_ship_qty_exempt_eligible=is_min_order_ship_qty_exempt_eligible,
         )
     return states
+
+
+def _trend_adjusted_sold7(
+    sold7: int,
+    daily_sales: tuple[int, ...],
+    recent_days: int,
+) -> int:
+    """Return a trend-adjusted sold7 using recent daily data.
+
+    Takes the minimum of the full 7-day daily average and the recent-N-day average.
+    This protects against over-stocking when sales are declining, while leaving
+    stable or growing SKUs unchanged.
+    """
+    if recent_days <= 0 or len(daily_sales) < recent_days:
+        return sold7
+    recent_avg = sum(daily_sales[-recent_days:]) / recent_days
+    sold7_daily_avg = sold7 / SOLD7_WINDOW_DAYS
+    adjusted_daily = min(recent_avg, sold7_daily_avg)
+    return round(adjusted_daily * SOLD7_WINDOW_DAYS)
 
 
 def _target_ship_qty(

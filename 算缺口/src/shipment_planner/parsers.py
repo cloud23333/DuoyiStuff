@@ -36,6 +36,12 @@ SALES_REQUIRED_COLUMNS = [
     "平台商品库存信息-平台待收货库存",
 ]
 
+TEMU_DAILY_REQUIRED_COLUMNS = [
+    "平台SKC_ID",
+    "平台SKU_ID",
+]
+_TEMU_DAILY_COL_RE = re.compile(r"^\d+月\d+日销量$")
+
 TAG_SPLIT_RE = re.compile(r"[，,]")
 IN_PROGRESS_STATUS = "发货中"
 SHORTAGE_STATUS = "缺货"
@@ -245,3 +251,42 @@ def _parse_number_or_default(
 
 def parse_hot_style(value: str | None) -> bool:
     return _clean_text(value).lower() in HOT_STYLE_TRUE_VALUES
+
+
+def _temu_date_sort_key(col: str) -> tuple[int, int]:
+    m = re.match(r"^(\d+)月(\d+)日销量$", col)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def parse_temu_daily_sales(
+    rows: list[dict[str, str]],
+) -> dict[tuple[str, str], tuple[int, ...]]:
+    """Parse Temu daily sales export.
+
+    Returns a mapping of (平台SKC_ID, 平台SKU_ID) → daily sales tuple (oldest → newest).
+    Rows sharing the same key (different shops) are summed.
+    """
+    if not rows:
+        return {}
+
+    all_cols = list(rows[0].keys())
+    date_cols = sorted(
+        [c for c in all_cols if _TEMU_DAILY_COL_RE.match(c)],
+        key=_temu_date_sort_key,
+    )
+
+    result: dict[tuple[str, str], tuple[int, ...]] = {}
+    for row in rows:
+        skc_id = _clean_text(row.get("平台SKC_ID"))
+        sku_id = _clean_text(row.get("平台SKU_ID"))
+        if not skc_id or not sku_id:
+            continue
+        key = (skc_id, sku_id)
+        daily = tuple(parse_int(row.get(c)) for c in date_cols)
+        if key in result:
+            existing = result[key]
+            result[key] = tuple(a + b for a, b in zip(existing, daily))
+        else:
+            result[key] = daily
+
+    return result

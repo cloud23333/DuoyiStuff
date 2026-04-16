@@ -23,7 +23,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from shipment_planner.engine import DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY
+from shipment_planner.engine import (
+    DEFAULT_TREND_RECENT_DAYS,
+    DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
+)
 
 from planner_ui.workflow import (
     PlannerRunResult,
@@ -44,6 +47,8 @@ class RunRequest:
     sold7_weight: float
     global_gap_multiplier: float
     zero_sold7_with_sold30_stockout_max_qty: int
+    temu_sales_path: Path | None
+    trend_recent_days: int
 
 
 class PlannerRunWorker(QObject):
@@ -60,6 +65,8 @@ class PlannerRunWorker(QObject):
         sold7_weight: float,
         global_gap_multiplier: float,
         zero_sold7_with_sold30_stockout_max_qty: int,
+        temu_sales_path: Path | None,
+        trend_recent_days: int,
     ) -> None:
         super().__init__()
         self._orders_path = orders_path
@@ -71,6 +78,8 @@ class PlannerRunWorker(QObject):
         self._zero_sold7_with_sold30_stockout_max_qty = (
             zero_sold7_with_sold30_stockout_max_qty
         )
+        self._temu_sales_path = temu_sales_path
+        self._trend_recent_days = trend_recent_days
 
     @pyqtSlot()
     def run(self) -> None:
@@ -85,6 +94,8 @@ class PlannerRunWorker(QObject):
                 zero_sold7_with_sold30_stockout_max_qty=(
                     self._zero_sold7_with_sold30_stockout_max_qty
                 ),
+                temu_sales_path=self._temu_sales_path,
+                trend_recent_days=self._trend_recent_days,
             )
         except Exception as exc:  # pragma: no cover - UI error channel
             self.failed.emit(str(exc))
@@ -151,6 +162,18 @@ class PlannerWindow(QMainWindow):
         self.output_browse_button.clicked.connect(self._on_pick_output_dir)
         self.output_browse_button.setMinimumWidth(92)
 
+        self.temu_path_edit = QLineEdit()
+        self.temu_path_edit.setReadOnly(True)
+        self.temu_path_edit.setPlaceholderText(".xlsx Temu销售明细（可选，用于趋势调整）")
+        self.temu_browse_button = QPushButton("Temu明细")
+        self.temu_browse_button.clicked.connect(self._on_pick_temu_sales)
+        self.temu_browse_button.setMinimumWidth(92)
+        self.temu_clear_button = QPushButton("✕")
+        self.temu_clear_button.setFixedWidth(28)
+        self.temu_clear_button.setToolTip("清除 Temu 明细文件")
+        self.temu_clear_button.clicked.connect(self._on_clear_temu_sales)
+        self.temu_clear_button.setEnabled(False)
+
         self.constraints_path_edit = QLineEdit()
         self.constraints_path_edit.setReadOnly(True)
         self.constraints_path_edit.setText(str(get_constraints_path()))
@@ -159,6 +182,11 @@ class PlannerWindow(QMainWindow):
         self.open_config_dir_button = QPushButton("配置目录")
         self.open_config_dir_button.clicked.connect(self._on_open_config_dir)
         self.open_config_dir_button.setMinimumWidth(92)
+
+        temu_row = QHBoxLayout()
+        temu_row.setSpacing(4)
+        temu_row.addWidget(self.temu_path_edit)
+        temu_row.addWidget(self.temu_clear_button)
 
         layout.addWidget(QLabel("订单"), 0, 0)
         layout.addWidget(self.order_path_edit, 0, 1)
@@ -169,9 +197,12 @@ class PlannerWindow(QMainWindow):
         layout.addWidget(QLabel("输出"), 2, 0)
         layout.addWidget(self.output_dir_edit, 2, 1)
         layout.addWidget(self.output_browse_button, 2, 2)
-        layout.addWidget(QLabel("配置"), 3, 0)
-        layout.addWidget(self.constraints_path_edit, 3, 1)
-        layout.addWidget(self.open_config_dir_button, 3, 2)
+        layout.addWidget(QLabel("Temu"), 3, 0)
+        layout.addLayout(temu_row, 3, 1)
+        layout.addWidget(self.temu_browse_button, 3, 2)
+        layout.addWidget(QLabel("配置"), 4, 0)
+        layout.addWidget(self.constraints_path_edit, 4, 1)
+        layout.addWidget(self.open_config_dir_button, 4, 2)
         return group
 
     def _build_run_group(self) -> QGroupBox:
@@ -216,6 +247,16 @@ class PlannerWindow(QMainWindow):
         )
         self.zero_sold7_stockout_cap_spin.setFixedWidth(108)
 
+        self.trend_recent_days_spin = QSpinBox()
+        self.trend_recent_days_spin.setRange(1, 7)
+        self.trend_recent_days_spin.setSingleStep(1)
+        self.trend_recent_days_spin.setValue(DEFAULT_TREND_RECENT_DAYS)
+        self.trend_recent_days_spin.setFixedWidth(108)
+        self.trend_recent_days_spin.setToolTip(
+            "Temu明细文件中用于趋势判断的最近天数（需选择Temu明细文件后生效）"
+        )
+        self.trend_recent_days_spin.setEnabled(False)
+
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
@@ -242,6 +283,10 @@ class PlannerWindow(QMainWindow):
         params_grid.addWidget(self.global_gap_multiplier_spin, 1, 1)
         params_grid.addWidget(QLabel("保底"), 1, 3)
         params_grid.addWidget(self.zero_sold7_stockout_cap_spin, 1, 4)
+
+        self.trend_recent_days_label = QLabel("趋势天数")
+        params_grid.addWidget(self.trend_recent_days_label, 2, 0)
+        params_grid.addWidget(self.trend_recent_days_spin, 2, 1)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -333,6 +378,30 @@ class PlannerWindow(QMainWindow):
         self._append_log(f"已选择销售文件：{selected_path}")
         self._set_status("销售文件已准备好。")
         self._refresh_run_button_state()
+
+    @pyqtSlot()
+    def _on_pick_temu_sales(self) -> None:
+        selected_path = self._pick_xlsx_file(
+            "选择 Temu 销售明细文件",
+            self.temu_path_edit.text(),
+            self.order_path_edit.text(),
+            self.sales_path_edit.text(),
+        )
+        if not selected_path:
+            return
+        self._set_path_edit(self.temu_path_edit, selected_path)
+        self._remember_dialog_dir(Path(selected_path))
+        self._append_log(f"已选择 Temu 明细文件：{selected_path}")
+        self.temu_clear_button.setEnabled(True)
+        self.trend_recent_days_spin.setEnabled(True)
+
+    @pyqtSlot()
+    def _on_clear_temu_sales(self) -> None:
+        self.temu_path_edit.clear()
+        self.temu_path_edit.setToolTip("")
+        self.temu_clear_button.setEnabled(False)
+        self.trend_recent_days_spin.setEnabled(False)
+        self._append_log("已清除 Temu 明细文件。")
 
     @pyqtSlot()
     def _on_pick_output_dir(self) -> None:
@@ -466,10 +535,12 @@ class PlannerWindow(QMainWindow):
         )
 
     def _set_running_state(self, running: bool) -> None:
+        temu_selected = bool(self.temu_path_edit.text().strip())
         for control in (
             self.order_browse_button,
             self.sales_browse_button,
             self.output_browse_button,
+            self.temu_browse_button,
             self.open_config_dir_button,
             self.sold7_weight_spin,
             self.sold30_weight_spin,
@@ -478,6 +549,8 @@ class PlannerWindow(QMainWindow):
             self.clear_log_button,
         ):
             control.setEnabled(not running)
+        self.temu_clear_button.setEnabled(not running and temu_selected)
+        self.trend_recent_days_spin.setEnabled(not running and temu_selected)
 
         if running:
             self.copy_skc_button.setEnabled(False)
@@ -532,6 +605,7 @@ class PlannerWindow(QMainWindow):
             QMessageBox.warning(self, "信息不完整", "请先选择订单文件、销售文件和输出目录。")
             return None
 
+        temu_text = self.temu_path_edit.text().strip()
         run_request = RunRequest(
             orders_path=Path(orders_text),
             sales_path=Path(sales_text),
@@ -542,6 +616,8 @@ class PlannerWindow(QMainWindow):
             zero_sold7_with_sold30_stockout_max_qty=int(
                 self.zero_sold7_stockout_cap_spin.value()
             ),
+            temu_sales_path=Path(temu_text) if temu_text else None,
+            trend_recent_days=int(self.trend_recent_days_spin.value()),
         )
 
         validation_error = self._validate_run_inputs(
@@ -578,6 +654,8 @@ class PlannerWindow(QMainWindow):
             zero_sold7_with_sold30_stockout_max_qty=(
                 run_request.zero_sold7_with_sold30_stockout_max_qty
             ),
+            temu_sales_path=run_request.temu_sales_path,
+            trend_recent_days=run_request.trend_recent_days,
         )
         self._run_worker.moveToThread(self._run_thread)
 

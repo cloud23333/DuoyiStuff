@@ -9,16 +9,19 @@ from .engine import (
     DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
     DEFAULT_SOLD30_WEIGHT,
     DEFAULT_SOLD7_WEIGHT,
+    DEFAULT_TREND_RECENT_DAYS,
     build_recommendations,
 )
 from .parsers import (
     ORDER_REQUIRED_COLUMNS,
     SALES_REQUIRED_COLUMNS,
+    TEMU_DAILY_REQUIRED_COLUMNS,
     assert_required_columns,
     assert_xlsx,
     missing_required_columns,
     parse_orders,
     parse_sales,
+    parse_temu_daily_sales,
 )
 from .reports import export_reports
 from .xlsx_reader import read_xlsx_table
@@ -31,6 +34,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Shipment suggestion app (xlsx-only).")
     parser.add_argument("--orders", help="Orders xlsx path (optional with auto-detect)")
     parser.add_argument("--sales", help="Sales xlsx path (optional with auto-detect)")
+    parser.add_argument(
+        "--temu-sales",
+        help="Temu daily sales xlsx path (optional; enables trend adjustment)",
+    )
     parser.add_argument(
         "--input-dir",
         default="data/input",
@@ -81,6 +88,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
             f"(default: {DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY})"
         ),
     )
+    parser.add_argument(
+        "--trend-recent-days",
+        type=int,
+        default=DEFAULT_TREND_RECENT_DAYS,
+        help=(
+            "Number of recent days used for trend adjustment when --temu-sales is provided "
+            f"(default: {DEFAULT_TREND_RECENT_DAYS})"
+        ),
+    )
     return parser
 
 
@@ -116,6 +132,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.sales is None:
         print(f"Auto-selected sales file: {sales_path}")
 
+    # Resolve optional Temu daily sales file
+    temu_sales_path: Path | None = None
+    if args.temu_sales is not None:
+        temu_sales_path = Path(args.temu_sales)
+        assert_xlsx(temu_sales_path)
+    else:
+        temu_sales_path = _try_auto_detect_temu(candidates, header_cache)
+        if temu_sales_path is not None:
+            print(f"Auto-selected Temu daily sales file: {temu_sales_path}")
+
     cached_orders = header_cache.get(orders_path)
     order_header, order_rows = cached_orders if cached_orders is not None else read_xlsx_table(orders_path)
     cached_sales = header_cache.get(sales_path)
@@ -126,6 +152,13 @@ def main(argv: list[str] | None = None) -> int:
 
     order_lines, shipping_in_progress_by_key = parse_orders(order_rows)
     sales_records = parse_sales(sales_rows)
+
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None = None
+    if temu_sales_path is not None:
+        cached_temu = header_cache.get(temu_sales_path)
+        _, temu_rows = cached_temu if cached_temu is not None else read_xlsx_table(temu_sales_path)
+        daily_sales_by_key = parse_temu_daily_sales(temu_rows)
+        print(f"Loaded Temu daily sales: {len(daily_sales_by_key)} SKUs (trend-recent-days={args.trend_recent_days})")
     constraints_path = (
         Path(args.constraints)
         if args.constraints is not None
@@ -151,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
         global_gap_multiplier=global_gap_multiplier,
         sold30_weight=args.sold30_weight,
         sold7_weight=args.sold7_weight,
+        daily_sales_by_key=daily_sales_by_key,
+        trend_recent_days=args.trend_recent_days,
     )
     outputs = export_reports(args.out_dir, recommendations, quality_rows, summary)
 
@@ -227,6 +262,20 @@ def _cached_header(path: Path, header_cache: HeaderCache) -> list[str] | None:
 
 def _contains_all_required_columns(header: list[str], required_columns: list[str]) -> bool:
     return not missing_required_columns(header, required_columns)
+
+
+def _try_auto_detect_temu(
+    candidates: list[Path],
+    header_cache: HeaderCache,
+) -> Path | None:
+    """Return the first candidate that looks like a Temu daily sales file, or None."""
+    for candidate in candidates:
+        header = _cached_header(candidate, header_cache)
+        if header is None:
+            continue
+        if _contains_all_required_columns(header, TEMU_DAILY_REQUIRED_COLUMNS):
+            return candidate
+    return None
 
 
 def _print_run_summary(
