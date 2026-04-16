@@ -248,7 +248,7 @@ class PlannerWindow(QMainWindow):
         self.zero_sold7_stockout_cap_spin.setFixedWidth(108)
 
         self.trend_recent_days_spin = QSpinBox()
-        self.trend_recent_days_spin.setRange(1, 7)
+        self.trend_recent_days_spin.setRange(1, 6)
         self.trend_recent_days_spin.setSingleStep(1)
         self.trend_recent_days_spin.setValue(DEFAULT_TREND_RECENT_DAYS)
         self.trend_recent_days_spin.setFixedWidth(108)

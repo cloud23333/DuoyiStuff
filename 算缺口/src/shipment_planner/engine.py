@@ -499,13 +499,16 @@ def _trend_adjusted_sold7(
 ) -> int:
     """Return a trend-adjusted sold7 using recent daily data.
 
+    Skips the last entry (today's incomplete data) and uses the N days before it.
     Takes the minimum of the full 7-day daily average and the recent-N-day average.
     This protects against over-stocking when sales are declining, while leaving
     stable or growing SKUs unchanged.
     """
-    if recent_days <= 0 or len(daily_sales) < recent_days:
+    # Exclude the last day (today) as it is likely incomplete
+    complete_days = daily_sales[:-1]
+    if recent_days <= 0 or len(complete_days) < recent_days:
         return sold7
-    recent_avg = sum(daily_sales[-recent_days:]) / recent_days
+    recent_avg = sum(complete_days[-recent_days:]) / recent_days
     sold7_daily_avg = sold7 / SOLD7_WINDOW_DAYS
     adjusted_daily = min(recent_avg, sold7_daily_avg)
     return round(adjusted_daily * SOLD7_WINDOW_DAYS)

@@ -93,8 +93,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_TREND_RECENT_DAYS,
         help=(
-            "Number of recent days used for trend adjustment when --temu-sales is provided "
-            f"(default: {DEFAULT_TREND_RECENT_DAYS})"
+            "Number of recent complete days used for trend adjustment when --temu-sales is "
+            f"provided; max 6 as today's data is always excluded (default: {DEFAULT_TREND_RECENT_DAYS})"
         ),
     )
     return parser
