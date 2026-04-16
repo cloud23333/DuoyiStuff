@@ -32,13 +32,10 @@ Thumbs.db
 # Generated project outputs
 data/output/
 
-*.xlsx
-*.json
-*.csv
-
 # Markdown docs: keep only README.md
 *.md
 !README.md
 
 # Git worktrees
 .worktrees/
+.~lock.*
