@@ -39,6 +39,7 @@ data/output/
 *.md
 !README.md
 !AGENTS.md
+!forecast-roadmap.md
 
 # Local assistant notes
 CLAUDE.md
