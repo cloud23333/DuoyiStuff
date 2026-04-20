@@ -12,10 +12,10 @@ def allocate_recommendation_quantities(
     key_states: dict[tuple[str, str], KeyState],
     sales_by_key: dict[tuple[str, str], SalesRecord],
     sku_order_max_qty: dict[str, int],
-) -> tuple[dict[int, int], int]:
+) -> tuple[dict[int, int], set[int]]:
     suggested_by_row: dict[int, int] = {}
     order_sku_shipped_totals: dict[tuple[str, str], int] = defaultdict(int)
-    capped_lines = 0
+    capped_rows: set[int] = set()
 
     grouped_lines: dict[tuple[str, str], list[OrderLine]] = defaultdict(list)
     for line in order_lines:
@@ -43,10 +43,10 @@ def allocate_recommendation_quantities(
             )
             suggested_by_row[line.row_number] = suggested_qty
             if was_capped:
-                capped_lines += 1
+                capped_rows.add(line.row_number)
             remaining -= suggested_qty
 
-    return suggested_by_row, capped_lines
+    return suggested_by_row, capped_rows
 
 
 def allocation_sort_key(line: OrderLine) -> tuple[int, datetime, int]:
@@ -62,7 +62,7 @@ def _apply_order_sku_limit(
     sku_order_max_qty: dict[str, int],
     order_sku_shipped_totals: dict[tuple[str, str], int],
 ) -> tuple[int, bool]:
-    constraint_sku = _pick_matching_constraint_sku(
+    constraint_sku = pick_matching_constraint_sku(
         line.order_sku, system_sku, sku_order_max_qty
     )
     if not constraint_sku:
@@ -78,7 +78,7 @@ def _apply_order_sku_limit(
     return capped_qty, was_capped
 
 
-def _pick_matching_constraint_sku(
+def pick_matching_constraint_sku(
     order_sku: str,
     system_sku: str,
     sku_order_max_qty: dict[str, int],

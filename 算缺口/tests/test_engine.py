@@ -77,3 +77,19 @@ def test_sku_order_limit_caps_total_for_same_order_and_sku() -> None:
 
     assert sum(int(row["recommended_ship"]) for row in recommendations) == 6
     assert summary["sku_order_limit_capped_lines"] == 1
+
+
+def test_small_change_keep_can_exceed_gap_but_not_sku_order_limit() -> None:
+    recommendations, _, summary = build_recommendations(
+        [_order_line(quantity=100)],
+        [_sales_record()],
+        min_order_ship_qty=0,
+        sku_order_max_qty={"sku-1": 90},
+    )
+
+    row = recommendations[0]
+    assert row["gap"] == 80
+    assert row["recommended_ship_before_small_change_rule"] == 80
+    assert row["recommended_ship"] == 90
+    assert row["key_recommended_total"] == 90
+    assert summary["sku_order_limit_capped_lines"] == 1

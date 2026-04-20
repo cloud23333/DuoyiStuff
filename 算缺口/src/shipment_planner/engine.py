@@ -78,7 +78,7 @@ def build_recommendations(
         daily_sales_by_key=daily_sales_by_key or {},
         trend_recent_days=trend_recent_days,
     )
-    suggested_by_row, sku_order_limit_capped_lines = (
+    suggested_by_row, sku_order_limit_capped_rows = (
         allocate_recommendation_quantities(
             order_lines=ordered_lines,
             key_states=key_states,
@@ -188,6 +188,11 @@ def build_recommendations(
         recommendations,
         order_lines=ordered_lines,
         keep_change_ratio=SMALL_CHANGE_KEEP_RATIO,
+        sales_by_key=sales_by_key,
+        sku_order_max_qty=normalized_sku_limits,
+    )
+    sku_order_limit_capped_rows.update(
+        small_change_stats.get("sku_order_limit_capped_rows", set())
     )
     threshold_stats = flag_min_order_ship_qty(recommendations, min_order_ship_qty)
     refresh_key_recommended_totals(recommendations)
@@ -202,7 +207,7 @@ def build_recommendations(
         min_order_ship_qty=min_order_ship_qty,
         threshold_stats=threshold_stats,
         sku_order_limit_rule_count=len(normalized_sku_limits),
-        sku_order_limit_capped_lines=sku_order_limit_capped_lines,
+        sku_order_limit_capped_lines=len(sku_order_limit_capped_rows),
         excluded_skc_rule_count=len(normalized_exclude_skc),
         excluded_skuid_rule_count=len(normalized_exclude_skuid),
         intercepted_order_lines=intercepted_order_lines,
@@ -524,5 +529,4 @@ def _target_ship_qty(
     sold30_daily = (sold30_weight * sold30) / SOLD30_WINDOW_DAYS
     sold7_daily = (sold7_weight * sold7) / SOLD7_WINDOW_DAYS
     return (sold30_daily + sold7_daily) * stocking_days
-
 
