@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from pathlib import Path
+import re
 from typing import TypeAlias
 
 from .constraints import DEFAULT_CONSTRAINTS_FILENAME, load_constraints
@@ -29,6 +31,7 @@ from .xlsx_reader import read_xlsx_table
 
 _XlsxData: TypeAlias = tuple[list[str], list[dict[str, str]]]
 HeaderCache: TypeAlias = dict[Path, _XlsxData | None]
+_FILENAME_EXPORT_TIMESTAMP_RE = re.compile(r"(?<!\d)(?:19|20)\d{12}(?!\d)")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -204,11 +207,21 @@ def _list_xlsx_candidates(input_dir: Path) -> list[Path]:
         raise ValueError(f"Input directory not found: {input_dir}")
 
     candidates = [path for path in input_dir.iterdir() if path.is_file() and path.suffix.lower() == ".xlsx"]
-    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    candidates.sort(key=_xlsx_candidate_recency_key, reverse=True)
 
     if not candidates:
         raise ValueError(f"No .xlsx files found in input directory: {input_dir}")
     return candidates
+
+
+def _xlsx_candidate_recency_key(path: Path) -> tuple[str, float]:
+    match = _FILENAME_EXPORT_TIMESTAMP_RE.search(path.name)
+    timestamp = (
+        match.group(0)
+        if match is not None
+        else datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y%m%d%H%M%S")
+    )
+    return timestamp, path.stat().st_mtime
 
 
 def _auto_select_xlsx(
