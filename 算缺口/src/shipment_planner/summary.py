@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections import Counter
 
 from .models import OrderLine, SalesRecord
-from .post_processing import _round_qty
+from .post_processing import round_qty
 
 
-def _build_summary(
+def build_summary(
     order_lines: list[OrderLine],
     sales_records: list[SalesRecord],
     recommendations: list[dict[str, object]],
@@ -42,7 +42,7 @@ def _build_summary(
         "order_lines": order_line_count,
         "sales_rows": len(sales_records),
         "matched_order_lines": matched_count,
-        "join_coverage_pct": _round_qty(join_coverage_pct),
+        "join_coverage_pct": round_qty(join_coverage_pct),
         "total_order_qty": total_order_qty,
         "total_recommended_qty": total_recommended_qty,
         "decision_ship_all": decision_counter.get("ship_all", 0),
@@ -64,9 +64,9 @@ def _build_summary(
         "intercepted_order_lines": intercepted_order_lines,
         "intercepted_orders": intercepted_orders,
         "small_change_kept_lines": small_change_kept_lines,
-        "global_gap_multiplier": _round_qty(global_gap_multiplier),
-        "sold30_weight": _round_qty(sold30_weight),
-        "sold7_weight": _round_qty(sold7_weight),
+        "global_gap_multiplier": round_qty(global_gap_multiplier),
+        "sold30_weight": round_qty(sold30_weight),
+        "sold7_weight": round_qty(sold7_weight),
         "zero_sold7_with_sold30_stockout_max_qty": (
             zero_sold7_with_sold30_stockout_max_qty
         ),

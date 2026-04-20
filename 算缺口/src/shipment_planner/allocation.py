@@ -7,7 +7,7 @@ from .models import KeyState, OrderLine, SalesRecord
 from .parsers import SHORTAGE_STATUS, normalize_sku_code
 
 
-def _allocate_recommendation_quantities(
+def allocate_recommendation_quantities(
     order_lines: list[OrderLine],
     key_states: dict[tuple[str, str], KeyState],
     sales_by_key: dict[tuple[str, str], SalesRecord],
@@ -32,7 +32,7 @@ def _allocate_recommendation_quantities(
         sales = sales_by_key.get(key)
         system_sku = sales.system_sku if sales is not None else ""
 
-        for line in sorted(lines, key=_allocation_sort_key):
+        for line in sorted(lines, key=allocation_sort_key):
             base_suggested_qty = min(line.quantity, remaining)
             suggested_qty, was_capped = _apply_order_sku_limit(
                 suggested_qty=base_suggested_qty,
@@ -49,7 +49,7 @@ def _allocate_recommendation_quantities(
     return suggested_by_row, capped_lines
 
 
-def _allocation_sort_key(line: OrderLine) -> tuple[int, datetime, int]:
+def allocation_sort_key(line: OrderLine) -> tuple[int, datetime, int]:
     # Reduce "缺货" first when supply is insufficient.
     status_priority = 1 if line.status == SHORTAGE_STATUS else 0
     return (status_priority, line.order_time, line.row_number)

@@ -29,12 +29,19 @@ dist/
 Thumbs.db
 *.swp
 
-# Generated project outputs
+# Shipment planning inputs and generated outputs
+*.xlsx
+*.csv
+data/input/*.json
 data/output/
 
 # Markdown docs: keep only README.md
 *.md
 !README.md
+!AGENTS.md
+
+# Local assistant notes
+CLAUDE.md
 
 # Git worktrees
 .worktrees/

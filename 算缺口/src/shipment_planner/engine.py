@@ -3,21 +3,21 @@ from __future__ import annotations
 from collections import defaultdict
 import math
 
-from .allocation import _allocate_recommendation_quantities
+from .allocation import allocate_recommendation_quantities
 from .models import KeyState, OrderLine, SalesRecord
 from .parsers import normalize_sku_code
 from .post_processing import (
-    _apply_small_change_keep_rule,
-    _assign_order_decision_reasons,
-    _assign_order_intercept_warnings,
-    _decision_reason,
-    _flag_min_order_ship_qty,
-    _line_change_ratio,
-    _refresh_key_recommended_totals,
-    _refresh_line_decision_reasons,
-    _round_qty,
+    apply_small_change_keep_rule,
+    assign_order_decision_reasons,
+    assign_order_intercept_warnings,
+    decision_reason,
+    flag_min_order_ship_qty,
+    line_change_ratio,
+    refresh_key_recommended_totals,
+    refresh_line_decision_reasons,
+    round_qty,
 )
-from .summary import _build_summary
+from .summary import build_summary
 
 DEFAULT_SOLD30_WEIGHT = 0.2
 DEFAULT_SOLD7_WEIGHT = 0.8
@@ -79,7 +79,7 @@ def build_recommendations(
         trend_recent_days=trend_recent_days,
     )
     suggested_by_row, sku_order_limit_capped_lines = (
-        _allocate_recommendation_quantities(
+        allocate_recommendation_quantities(
             order_lines=ordered_lines,
             key_states=key_states,
             sales_by_key=sales_by_key,
@@ -148,20 +148,20 @@ def build_recommendations(
                 "key_order_qty": key_order_qty,
                 "sold30": sold30,
                 "sold7": sold7,
-                "stocking_days": _round_qty(stocking_days),
-                "wh": _round_qty(stock_in_warehouse),
-                "pending_recv": _round_qty(pending_receive),
-                "pending_ship": _round_qty(pending_ship),
+                "stocking_days": round_qty(stocking_days),
+                "wh": round_qty(stock_in_warehouse),
+                "pending_recv": round_qty(pending_receive),
+                "pending_ship": round_qty(pending_ship),
                 "shipping_in_progress": shipping_in_progress,
                 "gap": gap,
                 "recommended_ship": suggested_qty,
                 "recommended_ship_before_small_change_rule": suggested_qty,
-                "small_change_ratio_before_rule": _round_qty(
-                    _line_change_ratio(line.quantity, suggested_qty)
+                "small_change_ratio_before_rule": round_qty(
+                    line_change_ratio(line.quantity, suggested_qty)
                 ),
                 "small_change_keep_warning": "no",
                 "key_recommended_total": key_recommended_total,
-                "decision_reason": _decision_reason(line.quantity, suggested_qty),
+                "decision_reason": decision_reason(line.quantity, suggested_qty),
                 "order_decision_reason": "",
                 "sku_code_check": sku_code_check,
                 "intercept_reason": intercept_reason,
@@ -180,20 +180,20 @@ def build_recommendations(
             }
         )
 
-    intercept_stats = _assign_order_intercept_warnings(
+    intercept_stats = assign_order_intercept_warnings(
         recommendations,
         suggested_by_row_before_intercept=suggested_by_row_before_intercept,
     )
-    small_change_stats = _apply_small_change_keep_rule(
+    small_change_stats = apply_small_change_keep_rule(
         recommendations,
         order_lines=ordered_lines,
         keep_change_ratio=SMALL_CHANGE_KEEP_RATIO,
     )
-    threshold_stats = _flag_min_order_ship_qty(recommendations, min_order_ship_qty)
-    _refresh_key_recommended_totals(recommendations)
-    _refresh_line_decision_reasons(recommendations)
-    _assign_order_decision_reasons(recommendations, ordered_lines)
-    summary = _build_summary(
+    threshold_stats = flag_min_order_ship_qty(recommendations, min_order_ship_qty)
+    refresh_key_recommended_totals(recommendations)
+    refresh_line_decision_reasons(recommendations)
+    assign_order_decision_reasons(recommendations, ordered_lines)
+    summary = build_summary(
         ordered_lines,
         sales_records,
         recommendations,
@@ -524,6 +524,5 @@ def _target_ship_qty(
     sold30_daily = (sold30_weight * sold30) / SOLD30_WINDOW_DAYS
     sold7_daily = (sold7_weight * sold7) / SOLD7_WINDOW_DAYS
     return (sold30_daily + sold7_daily) * stocking_days
-
 
 

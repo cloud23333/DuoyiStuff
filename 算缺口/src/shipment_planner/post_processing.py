@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from .allocation import _allocation_sort_key
+from .allocation import allocation_sort_key
 from .models import OrderLine
 
 SALES_SPIKE_MIN_SOLD30 = 30
@@ -10,17 +10,17 @@ SALES_SPIKE_RATIO_THRESHOLD = 0.9
 SALES_SPIKE_WARNING_DECISION = "sales_spike_warning"
 
 
-def _round_qty(value: float) -> float:
+def round_qty(value: float) -> float:
     return round(value, 4)
 
 
-def _line_change_ratio(line_qty: float, suggested_qty: float) -> float:
+def line_change_ratio(line_qty: float, suggested_qty: float) -> float:
     if line_qty <= 0:
         return 0.0
     return abs(suggested_qty - line_qty) / line_qty
 
 
-def _decision_reason(line_qty: int, suggested_qty: int) -> str:
+def decision_reason(line_qty: int, suggested_qty: int) -> str:
     if suggested_qty <= 0:
         return "hold"
     if suggested_qty >= line_qty:
@@ -76,8 +76,8 @@ def _initialize_small_change_fields(row: dict[str, object]) -> None:
     line_qty = int(row["line_order_qty"])
     suggested_qty = int(row["recommended_ship"])
     row["recommended_ship_before_small_change_rule"] = suggested_qty
-    row["small_change_ratio_before_rule"] = _round_qty(
-        _line_change_ratio(line_qty, suggested_qty)
+    row["small_change_ratio_before_rule"] = round_qty(
+        line_change_ratio(line_qty, suggested_qty)
     )
     row["small_change_keep_warning"] = "no"
 
@@ -104,7 +104,7 @@ def _apply_small_change_keep_by_key(
     if not lines:
         return 0
 
-    prioritized_lines = sorted(lines, key=_allocation_sort_key)
+    prioritized_lines = sorted(lines, key=allocation_sort_key)
     allocation_rank = {
         line.row_number: idx for idx, line in enumerate(prioritized_lines)
     }
@@ -117,7 +117,7 @@ def _apply_small_change_keep_by_key(
         if suggested_qty >= line.quantity:
             continue
 
-        change_ratio = _line_change_ratio(line.quantity, suggested_qty)
+        change_ratio = line_change_ratio(line.quantity, suggested_qty)
         if change_ratio <= keep_change_ratio:
             candidate_rows.append(line.row_number)
 
@@ -152,7 +152,7 @@ def _apply_small_change_keep_by_key(
     return kept_rows
 
 
-def _apply_small_change_keep_rule(
+def apply_small_change_keep_rule(
     recommendations: list[dict[str, object]],
     *,
     order_lines: list[OrderLine],
@@ -184,7 +184,7 @@ def _apply_small_change_keep_rule(
     return {"small_change_kept_lines": kept_rows}
 
 
-def _flag_min_order_ship_qty(
+def flag_min_order_ship_qty(
     recommendations: list[dict[str, object]],
     min_order_ship_qty: int,
 ) -> dict[str, int]:
@@ -252,7 +252,7 @@ def _flag_min_order_ship_qty(
     }
 
 
-def _assign_order_intercept_warnings(
+def assign_order_intercept_warnings(
     recommendations: list[dict[str, object]],
     *,
     suggested_by_row_before_intercept: dict[int, int],
@@ -292,7 +292,7 @@ def _assign_order_intercept_warnings(
     }
 
 
-def _refresh_key_recommended_totals(recommendations: list[dict[str, object]]) -> None:
+def refresh_key_recommended_totals(recommendations: list[dict[str, object]]) -> None:
     key_totals: dict[tuple[str, str], int] = defaultdict(int)
     for row in recommendations:
         key = _recommendation_key(row)
@@ -303,9 +303,9 @@ def _refresh_key_recommended_totals(recommendations: list[dict[str, object]]) ->
         row["key_recommended_total"] = key_totals.get(key, 0)
 
 
-def _refresh_line_decision_reasons(recommendations: list[dict[str, object]]) -> None:
+def refresh_line_decision_reasons(recommendations: list[dict[str, object]]) -> None:
     for row in recommendations:
-        base_decision = _decision_reason(
+        base_decision = decision_reason(
             int(row["line_order_qty"]),
             int(row["recommended_ship"]),
         )
@@ -315,7 +315,7 @@ def _refresh_line_decision_reasons(recommendations: list[dict[str, object]]) -> 
         row["decision_reason"] = base_decision
 
 
-def _assign_order_decision_reasons(
+def assign_order_decision_reasons(
     recommendations: list[dict[str, object]],
     order_lines: list[OrderLine],
 ) -> None:
@@ -325,7 +325,7 @@ def _assign_order_decision_reasons(
 
     for row in recommendations:
         order_id = str(row["internal_order_id"])
-        base_order_decision = _decision_reason(
+        base_order_decision = decision_reason(
             order_qty_totals.get(order_id, 0),
             order_recommended_totals.get(order_id, 0),
         )
