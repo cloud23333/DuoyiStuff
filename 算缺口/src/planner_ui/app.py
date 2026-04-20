@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication
@@ -30,6 +31,8 @@ from planner_ui.workflow import (
     get_constraints_path,
     run_planner,
 )
+
+CompletionDialogAction = Literal["open_recommendation", "open_output_dir"]
 
 
 @dataclass(slots=True)
@@ -420,19 +423,23 @@ class PlannerWindow(QMainWindow):
         self._append_log(f"输出文件：{result_obj.summary_path}")
         self._set_status("运行完成，结果已写入输出子目录。")
 
-        QMessageBox.information(
-            self,
-            "运行完成",
-            "\n".join(
-                [
-                    "输出文件已生成：",
-                    f"目录：{result_obj.output_dir}",
-                    str(result_obj.recommendation_path),
-                    str(result_obj.quality_path),
-                    str(result_obj.summary_path),
-                ]
-            ),
-        )
+        action = _ask_completion_dialog_action(self, result_obj)
+        if action == "open_recommendation":
+            self._open_generated_path(result_obj.recommendation_path, "明细表")
+        elif action == "open_output_dir":
+            self._open_generated_path(result_obj.output_dir, "输出目录")
+
+    def _open_generated_path(self, path: Path, label: str) -> None:
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        if opened:
+            self._append_log(f"已打开{label}：{path}")
+            self._set_status(f"已打开{label}。")
+            return
+
+        message = f"无法打开{label}，请手动前往：{path}"
+        self._append_log(f"【错误】{message}")
+        self._set_status(message, error=True)
+        QMessageBox.warning(self, f"无法打开{label}", message)
 
     @pyqtSlot(str)
     def _on_run_failed(self, message: str) -> None:
@@ -697,6 +704,41 @@ def _monospace_font() -> QFont:
     font = QFont("Consolas")
     font.setStyleHint(QFont.StyleHint.Monospace)
     return font
+
+
+def _ask_completion_dialog_action(
+    parent: QWidget | None,
+    result_obj: PlannerRunResult,
+) -> CompletionDialogAction | None:
+    dialog = QMessageBox(parent)
+    dialog.setIcon(QMessageBox.Icon.Information)
+    dialog.setWindowTitle("运行完成")
+    dialog.setText("输出文件已生成：")
+    dialog.setInformativeText(
+        "\n".join(
+            [
+                f"目录：{result_obj.output_dir}",
+                str(result_obj.recommendation_path),
+                str(result_obj.quality_path),
+                str(result_obj.summary_path),
+            ]
+        )
+    )
+    open_recommendation_button = dialog.addButton(
+        "打开明细表", QMessageBox.ButtonRole.ActionRole
+    )
+    open_output_dir_button = dialog.addButton(
+        "打开输出目录", QMessageBox.ButtonRole.ActionRole
+    )
+    dialog.addButton(QMessageBox.StandardButton.Ok)
+    dialog.exec()
+
+    clicked_button = dialog.clickedButton()
+    if clicked_button == open_recommendation_button:
+        return "open_recommendation"
+    if clicked_button == open_output_dir_button:
+        return "open_output_dir"
+    return None
 
 
 def _app_stylesheet() -> str:
