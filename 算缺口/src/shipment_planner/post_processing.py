@@ -5,10 +5,6 @@ from collections import defaultdict
 from .allocation import allocation_sort_key, pick_matching_constraint_sku
 from .models import OrderLine, SalesRecord
 
-SALES_SPIKE_MIN_SOLD30 = 30
-SALES_SPIKE_RATIO_THRESHOLD = 0.9
-SALES_SPIKE_WARNING_DECISION = "sales_spike_warning"
-
 
 def round_qty(value: float) -> float:
     return round(value, 4)
@@ -26,14 +22,6 @@ def decision_reason(line_qty: int, suggested_qty: int) -> str:
     if suggested_qty >= line_qty:
         return "ship_all"
     return "ship_partial"
-
-
-def _is_sales_spike_warning(sold30: int, sold7: int) -> bool:
-    if sold30 < SALES_SPIKE_MIN_SOLD30:
-        return False
-    if sold30 <= 0:
-        return False
-    return (sold7 / sold30) >= SALES_SPIKE_RATIO_THRESHOLD
 
 
 def _recommendation_key(row: dict[str, object]) -> tuple[str, str]:
@@ -54,22 +42,6 @@ def _sum_recommended_by_order(
     for row in recommendations:
         totals[str(row["internal_order_id"])] += int(row["recommended_ship"])
     return dict(totals)
-
-
-def _order_all_sales_spike_warning(
-    recommendations: list[dict[str, object]],
-) -> dict[str, bool]:
-    order_all_warning: dict[str, bool] = {}
-    for row in recommendations:
-        order_id = str(row["internal_order_id"])
-        is_warning = (
-            str(row.get("decision_reason", "")) == SALES_SPIKE_WARNING_DECISION
-        )
-        if order_id not in order_all_warning:
-            order_all_warning[order_id] = is_warning
-            continue
-        order_all_warning[order_id] = order_all_warning[order_id] and is_warning
-    return order_all_warning
 
 
 def _initialize_small_change_fields(row: dict[str, object]) -> None:
@@ -454,14 +426,10 @@ def refresh_key_recommended_totals(recommendations: list[dict[str, object]]) -> 
 
 def refresh_line_decision_reasons(recommendations: list[dict[str, object]]) -> None:
     for row in recommendations:
-        base_decision = decision_reason(
+        row["decision_reason"] = decision_reason(
             int(row["line_order_qty"]),
             int(row["recommended_ship"]),
         )
-        if _is_sales_spike_warning(int(row["sold30"]), int(row["sold7"])):
-            row["decision_reason"] = SALES_SPIKE_WARNING_DECISION
-            continue
-        row["decision_reason"] = base_decision
 
 
 def assign_order_decision_reasons(
@@ -470,15 +438,10 @@ def assign_order_decision_reasons(
 ) -> None:
     order_qty_totals = _sum_order_qty_by_order_id(order_lines)
     order_recommended_totals = _sum_recommended_by_order(recommendations)
-    order_all_sales_spike_warning = _order_all_sales_spike_warning(recommendations)
 
     for row in recommendations:
         order_id = str(row["internal_order_id"])
-        base_order_decision = decision_reason(
+        row["order_decision_reason"] = decision_reason(
             order_qty_totals.get(order_id, 0),
             order_recommended_totals.get(order_id, 0),
         )
-        if order_all_sales_spike_warning.get(order_id, False):
-            row["order_decision_reason"] = SALES_SPIKE_WARNING_DECISION
-            continue
-        row["order_decision_reason"] = base_order_decision

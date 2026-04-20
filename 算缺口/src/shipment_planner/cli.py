@@ -150,7 +150,13 @@ def main(argv: list[str] | None = None) -> int:
         global_gap_multiplier=global_gap_multiplier,
         daily_sales_by_key=daily_sales_by_key,
     )
-    outputs = export_reports(args.out_dir, recommendations, quality_rows, summary)
+    outputs = export_reports(
+        args.out_dir,
+        recommendations,
+        quality_rows,
+        summary,
+        daily_sales_by_key=daily_sales_by_key,
+    )
 
     _print_run_summary(
         summary=summary,

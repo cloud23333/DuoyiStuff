@@ -26,6 +26,7 @@ SMALL_CHANGE_KEEP_RATIO = 0.3
 FORECAST_STRATEGY_CONSERVATIVE = "保守"
 FORECAST_STRATEGY_NORMAL = "正常"
 FORECAST_STRATEGY_AGGRESSIVE = "激进"
+FORECAST_STRATEGY_SLOW_MOVER = "慢销"
 
 
 def build_recommendations(
@@ -111,8 +112,6 @@ def build_recommendations(
             quality_rows.append(quality_issue_row)
 
         (
-            sold30,
-            sold7,
             stocking_days,
             stock_in_warehouse,
             pending_receive,
@@ -130,8 +129,6 @@ def build_recommendations(
                 "系统商品编码": display_system_sku,
                 "line_order_qty": line.quantity,
                 "key_order_qty": key_order_qty,
-                "sold30": sold30,
-                "sold7": sold7,
                 "forecast_strategy": forecast_metrics.strategy,
                 "forecast_daily_sales": round_qty(
                     forecast_metrics.forecast_daily_sales
@@ -320,13 +317,11 @@ def _evaluate_sku_code(
 
 def _sales_metrics(
     sales: SalesRecord | None,
-) -> tuple[int, int, float, float, float, float]:
+) -> tuple[float, float, float, float]:
     if sales is None:
-        return 0, 0, 0.0, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0
 
     return (
-        sales.sold30,
-        sales.sold7,
         sales.stocking_days,
         sales.stock_in_warehouse,
         sales.pending_receive,
@@ -365,8 +360,6 @@ def _build_sales_lookup(
         if key not in accum:
             first_seen[key] = record
             accum[key] = {
-                "sold30": record.sold30,
-                "sold7": record.sold7,
                 "stocking_days": record.stocking_days,
                 "stock_in_warehouse": record.stock_in_warehouse,
                 "pending_receive": record.pending_receive,
@@ -378,8 +371,6 @@ def _build_sales_lookup(
             duplicate_keys.add(key)
             acc = accum[key]
             accum[key] = {
-                "sold30": acc["sold30"] + record.sold30,
-                "sold7": acc["sold7"] + record.sold7,
                 "stocking_days": max(acc["stocking_days"], record.stocking_days),
                 "stock_in_warehouse": acc["stock_in_warehouse"] + record.stock_in_warehouse,
                 "pending_receive": acc["pending_receive"] + record.pending_receive,
@@ -394,8 +385,6 @@ def _build_sales_lookup(
             row_number=first_seen[key].row_number,
             skc=first_seen[key].skc,
             skuid=first_seen[key].skuid,
-            sold30=acc["sold30"],
-            sold7=acc["sold7"],
             stocking_days=acc["stocking_days"],
             stock_in_warehouse=acc["stock_in_warehouse"],
             pending_receive=acc["pending_receive"],
@@ -441,8 +430,12 @@ def _build_key_states(
             continue
 
         shipping_in_progress = shipping_in_progress_by_key.get(key, 0)
-        forecast_metrics = _forecast_metrics(
+        masked_daily_sales = _mask_stockout_tail(
             daily_sales=daily_sales_by_key[key],
+            stock_in_warehouse=sales.stock_in_warehouse,
+        )
+        forecast_metrics = _forecast_metrics(
+            daily_sales=masked_daily_sales,
             stocking_days=sales.stocking_days,
             is_hot_style=sales.is_hot_style,
         )
@@ -471,6 +464,76 @@ def _build_key_states(
     return states
 
 
+def compute_forecast_metrics(
+    *,
+    daily_sales: tuple[int, ...],
+    stocking_days: float,
+    is_hot_style: bool,
+    stock_in_warehouse: float = 0.0,
+    apply_stockout_mask: bool = True,
+) -> ForecastMetrics:
+    """Public wrapper for the forecast pipeline (used by eval harness + engine)."""
+    effective_daily = (
+        _mask_stockout_tail(
+            daily_sales=daily_sales,
+            stock_in_warehouse=stock_in_warehouse,
+        )
+        if apply_stockout_mask
+        else daily_sales
+    )
+    return _forecast_metrics(
+        daily_sales=effective_daily,
+        stocking_days=stocking_days,
+        is_hot_style=is_hot_style,
+    )
+
+
+def _mask_stockout_tail(
+    *,
+    daily_sales: tuple[int, ...],
+    stock_in_warehouse: float,
+) -> tuple[int, ...]:
+    """Strip trailing zero-sale days when the SKU is currently out of stock.
+
+    Trailing zeros during an out-of-stock period are driven by unavailability,
+    not by demand, so including them biases the forecast downward. We only
+    mask when (a) the SKU shows zero warehouse inventory right now and
+    (b) there is at least one historical non-zero sale to anchor against.
+    """
+    cut = stockout_mask_cut(
+        daily_sales=daily_sales,
+        stock_in_warehouse=stock_in_warehouse,
+    )
+    if cut is None:
+        return daily_sales
+    return daily_sales[:cut]
+
+
+def stockout_mask_cut(
+    *,
+    daily_sales: tuple[int, ...],
+    stock_in_warehouse: float,
+) -> int | None:
+    """Return the index where the stockout mask starts, or None if no mask applies.
+
+    When a cut ``c`` is returned, ``daily_sales[:c]`` is the kept history and
+    ``daily_sales[c:]`` are the trailing zeros attributed to being out of stock.
+    """
+    if stock_in_warehouse > 0 or not daily_sales:
+        return None
+
+    last_nonzero = -1
+    for index in range(len(daily_sales) - 1, -1, -1):
+        if daily_sales[index] > 0:
+            last_nonzero = index
+            break
+
+    if last_nonzero < 0 or last_nonzero == len(daily_sales) - 1:
+        return None
+
+    return last_nonzero + 1
+
+
 def _forecast_metrics(
     *,
     daily_sales: tuple[int, ...],
@@ -478,35 +541,49 @@ def _forecast_metrics(
     is_hot_style: bool,
 ) -> ForecastMetrics:
     values = [max(0, int(value)) for value in daily_sales]
-    mean_daily = statistics.fmean(values)
-    median_daily = float(statistics.median(values))
+    mean_daily = statistics.fmean(values) if values else 0.0
+    median_daily = float(statistics.median(values)) if values else 0.0
     recent_7_avg = _average_recent(values, 7)
     recent_3_avg = _average_recent(values, 3)
     trimmed_mean = _trimmed_mean(values)
     volatility = _volatility(values, mean_daily)
     isolated_spike = _has_isolated_recent_spike(values, median_daily, recent_7_avg)
 
-    strategy = _forecast_strategy(
-        median_daily=median_daily,
-        recent_7_avg=recent_7_avg,
-        recent_3_avg=recent_3_avg,
-        volatility=volatility,
-        isolated_spike=isolated_spike,
-        is_hot_style=is_hot_style,
-    )
-    forecast_daily_sales = _forecast_daily_sales(
-        strategy=strategy,
-        median_daily=median_daily,
-        recent_7_avg=recent_7_avg,
-        recent_3_avg=recent_3_avg,
-        trimmed_mean=trimmed_mean,
-    )
+    if _is_slow_mover(mean_daily=mean_daily, median_daily=median_daily):
+        strategy = FORECAST_STRATEGY_SLOW_MOVER
+        forecast_daily_sales = mean_daily
+    else:
+        strategy = _forecast_strategy(
+            median_daily=median_daily,
+            recent_7_avg=recent_7_avg,
+            recent_3_avg=recent_3_avg,
+            volatility=volatility,
+            isolated_spike=isolated_spike,
+            is_hot_style=is_hot_style,
+        )
+        forecast_daily_sales = _forecast_daily_sales(
+            strategy=strategy,
+            median_daily=median_daily,
+            recent_7_avg=recent_7_avg,
+            recent_3_avg=recent_3_avg,
+            trimmed_mean=trimmed_mean,
+        )
     forecast_stocking_period_sales = forecast_daily_sales * max(0.0, stocking_days)
     return ForecastMetrics(
         strategy=strategy,
         forecast_daily_sales=forecast_daily_sales,
         forecast_stocking_period_sales=forecast_stocking_period_sales,
     )
+
+
+def _is_slow_mover(*, mean_daily: float, median_daily: float) -> bool:
+    """Zero-inflated slow mover: most days sell 0, a few have sales.
+
+    Median=0 but mean>0 is the signature; in that case ``min(median, ...)``
+    in the conservative formula collapses to 0 and replenishment stops. Use
+    the mean (Poisson rate) instead.
+    """
+    return median_daily == 0.0 and mean_daily > 0.0
 
 
 def _average_recent(values: list[int], days: int) -> float:

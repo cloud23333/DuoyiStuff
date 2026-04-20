@@ -1,9 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import io
 import csv
 import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
+
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XlsxImage
+from openpyxl.utils import get_column_letter
+
+from .engine import stockout_mask_cut
+from .forecast_curve import build_forecast_curve
+from .plots import render_sku_plot
 
 RECOMMENDATION_FIELDS = [
     ("internal_order_id", "内部订单号"),
@@ -14,11 +23,10 @@ RECOMMENDATION_FIELDS = [
     ("sku_code_check", "SKU编码校验"),
     ("line_order_qty", "订单行数量"),
     ("key_order_qty", "同SKC_SKUID总下单量"),
-    ("sold30", "近30日销量"),
-    ("sold7", "近7日销量"),
     ("forecast_strategy", "预测策略"),
     ("forecast_daily_sales", "预测日均销量"),
     ("forecast_stocking_period_sales", "预测备货期销量"),
+    ("__plot__", "销量与预测曲线"),
     ("stocking_days", "备货逻辑天数"),
     ("wh", "平台仓内库存"),
     ("pending_ship", "平台待发货库存"),
@@ -41,6 +49,12 @@ RECOMMENDATION_FIELDS = [
     ("min_order_ship_qty_exempt_applied_warning", "小于10不发豁免生效提示"),
 ]
 
+PLOT_COLUMN_NAME = "销量与预测曲线"
+PLOT_COLUMN_WIDTH_CHARS = 46.0
+PLOT_ROW_HEIGHT_POINTS = 100.0
+PLOT_IMAGE_WIDTH_PX = 320
+PLOT_IMAGE_HEIGHT_PX = 128
+
 QUALITY_FIELDS = [
     ("type", "问题类型"),
     ("internal_order_id", "内部订单号"),
@@ -55,7 +69,6 @@ DECISION_REASON_MAP = {
     "ship_all": "全发",
     "ship_partial": "部分发",
     "hold": "暂不发",
-    "sales_spike_warning": "销量突增预警",
 }
 
 INTERCEPT_REASON_MAP = {
@@ -84,8 +97,6 @@ QUALITY_MESSAGE_MAP = {
 INT_FORMAT_FIELDS = {
     "line_order_qty",
     "key_order_qty",
-    "sold30",
-    "sold7",
     "gap",
     "key_recommended_total",
     "recommended_ship_before_small_change_rule",
@@ -167,30 +178,121 @@ def export_reports(
     recommendations: list[dict[str, object]],
     quality_rows: list[dict[str, object]],
     summary: dict[str, object],
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
 ) -> dict[str, Path]:
     output_dir = Path(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    recommendation_path = output_dir / "发货建议明细.csv"
+    recommendation_path = output_dir / "发货建议明细.xlsx"
     quality_path = output_dir / "数据质量报告.csv"
     summary_path = output_dir / "运行摘要.json"
 
-    recommendation_columns = [target for _, target in RECOMMENDATION_FIELDS]
     quality_columns = [target for _, target in QUALITY_FIELDS]
 
+    plot_cache = _build_plot_cache(recommendations, daily_sales_by_key)
     localized_recommendations = [_localize_recommendation_row(row) for row in recommendations]
     localized_quality_rows = [_localize_quality_row(row) for row in quality_rows]
     localized_summary = _localize_summary(summary)
 
-    _write_csv(recommendation_path, localized_recommendations, recommendation_columns)
+    _write_recommendations_xlsx(
+        path=recommendation_path,
+        rows=localized_recommendations,
+        recommendation_rows=recommendations,
+        plot_cache=plot_cache,
+    )
     _write_csv(quality_path, localized_quality_rows, quality_columns)
-    summary_path.write_text(json.dumps(localized_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(localized_summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     return {
         "final_recommendation": recommendation_path,
         "quality_report": quality_path,
         "run_summary": summary_path,
     }
+
+
+def _build_plot_cache(
+    recommendations: list[dict[str, object]],
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
+) -> dict[tuple[str, str], bytes]:
+    cache: dict[tuple[str, str], bytes] = {}
+    for row in recommendations:
+        key = (str(row.get("店铺款式编码", "")), str(row.get("店铺商品编码", "")))
+        if key in cache:
+            continue
+        history = daily_sales_by_key.get(key, ())
+        forecast = build_forecast_curve(
+            strategy=str(row.get("forecast_strategy", "") or ""),
+            forecast_daily_sales=_as_float(row.get("forecast_daily_sales", 0.0)),
+            stocking_days=_as_float(row.get("stocking_days", 0.0)),
+        )
+        if not history and not forecast:
+            continue
+        masked_tail_from = stockout_mask_cut(
+            daily_sales=history,
+            stock_in_warehouse=_as_float(row.get("wh", 0.0)),
+        )
+        title = f"SKC:{key[0]} / SKUID:{key[1]}"
+        cache[key] = render_sku_plot(
+            history=history,
+            forecast=forecast,
+            title=title,
+            masked_tail_from=masked_tail_from,
+        )
+    return cache
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _write_recommendations_xlsx(
+    *,
+    path: Path,
+    rows: list[dict[str, object]],
+    recommendation_rows: list[dict[str, object]],
+    plot_cache: dict[tuple[str, str], bytes],
+) -> None:
+    columns = [target for _, target in RECOMMENDATION_FIELDS]
+    plot_col_idx = columns.index(PLOT_COLUMN_NAME) + 1
+    plot_col_letter = get_column_letter(plot_col_idx)
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "发货建议明细"
+
+    for col_idx, name in enumerate(columns, start=1):
+        worksheet.cell(row=1, column=col_idx, value=name)
+
+    worksheet.column_dimensions[plot_col_letter].width = PLOT_COLUMN_WIDTH_CHARS
+
+    for row_offset, (localized, source) in enumerate(zip(rows, recommendation_rows)):
+        excel_row = row_offset + 2
+        for col_idx, name in enumerate(columns, start=1):
+            if name == PLOT_COLUMN_NAME:
+                continue
+            worksheet.cell(row=excel_row, column=col_idx, value=localized.get(name, ""))
+
+        key = (str(source.get("店铺款式编码", "")), str(source.get("店铺商品编码", "")))
+        image_bytes = plot_cache.get(key)
+        if image_bytes is not None:
+            image_stream = io.BytesIO(image_bytes)
+            excel_image = XlsxImage(image_stream)
+            excel_image.width = PLOT_IMAGE_WIDTH_PX
+            excel_image.height = PLOT_IMAGE_HEIGHT_PX
+            excel_image.anchor = f"{plot_col_letter}{excel_row}"
+            worksheet.add_image(excel_image)
+            worksheet.row_dimensions[excel_row].height = PLOT_ROW_HEIGHT_POINTS
+
+    workbook.save(path)
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) -> None:
@@ -222,12 +324,15 @@ def _localize_quality_row(row: dict[str, object]) -> dict[str, object]:
 def _localize_row(
     *,
     row: dict[str, object],
-    fields: list[tuple[str, str]],
+    fields: Sequence[tuple[str, str]],
     default_value: object,
     value_mapper: Callable[[str, object], object],
 ) -> dict[str, object]:
     localized: dict[str, object] = {}
     for source, target in fields:
+        if source == "__plot__":
+            localized[target] = ""
+            continue
         localized[target] = value_mapper(source, row.get(source, default_value))
     return localized
 

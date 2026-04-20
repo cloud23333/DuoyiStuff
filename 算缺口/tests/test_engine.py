@@ -31,8 +31,6 @@ def _order_line(
 
 def _sales_record(
     *,
-    sold30: int = 0,
-    sold7: int = 70,
     stock_in_warehouse: float = 0.0,
     pending_receive: float = 0.0,
     pending_ship: float = 0.0,
@@ -45,8 +43,6 @@ def _sales_record(
         skuid="sku-id-1",
         system_sku=system_sku,
         is_hot_style=is_hot_style,
-        sold30=sold30,
-        sold7=sold7,
         stocking_days=10.0,
         stock_in_warehouse=stock_in_warehouse,
         pending_receive=pending_receive,
@@ -91,7 +87,7 @@ def test_empty_daily_sales_sequence_errors_without_fallback() -> None:
 def test_stable_daily_sales_outputs_normal_strategy() -> None:
     recommendations, quality_rows, summary = build_recommendations(
         [_order_line(quantity=20)],
-        [_sales_record(sold30=30, sold7=0)],
+        [_sales_record()],
         min_order_ship_qty=0,
         daily_sales_by_key=_daily_sales((5, 5, 5, 5, 5, 5, 5)),
     )
@@ -143,11 +139,60 @@ def test_daily_sales_forecast_drives_gap_and_recommended_ship() -> None:
     assert row["recommended_ship"] == 15
 
 
-def test_recommendation_report_includes_forecast_columns_near_sales_fields() -> None:
+def test_slow_mover_uses_mean_rate_instead_of_conservative_zero() -> None:
+    # Sparse history: 2 sales spread across 20 days → median=0 but mean>0.
+    # Without the slow-mover path, conservative's min(median, ...) collapses to 0.
+    recommendations, _, _ = build_recommendations(
+        [_order_line(quantity=20)],
+        [_sales_record(stock_in_warehouse=0, pending_receive=0, pending_ship=0)],
+        min_order_ship_qty=0,
+        daily_sales_by_key=_daily_sales((0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)),
+    )
+
+    row = recommendations[0]
+    assert row["forecast_strategy"] == "慢销"
+    assert row["forecast_daily_sales"] > 0
+    assert row["gap"] > 0
+
+
+def test_stockout_mask_strips_trailing_zeros_when_out_of_stock() -> None:
+    # 7 days of 5 sales then 7 days of forced 0s while OOS.
+    # Without masking, median/recent_7 drop to 0 → forecast near 0.
+    # With masking, trailing zeros are treated as stockout-induced and dropped.
+    recommendations, _, _ = build_recommendations(
+        [_order_line(quantity=50)],
+        [_sales_record(stock_in_warehouse=0, pending_receive=0, pending_ship=0)],
+        min_order_ship_qty=0,
+        daily_sales_by_key=_daily_sales(
+            (5, 5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0)
+        ),
+    )
+
+    row = recommendations[0]
+    assert row["forecast_daily_sales"] >= 5
+    assert row["gap"] >= 50
+
+
+def test_stockout_mask_not_applied_when_stock_is_positive() -> None:
+    recommendations, _, _ = build_recommendations(
+        [_order_line(quantity=50)],
+        [_sales_record(stock_in_warehouse=100)],
+        min_order_ship_qty=0,
+        daily_sales_by_key=_daily_sales(
+            (5, 5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0)
+        ),
+    )
+
+    # Positive stock → trailing zeros kept → forecast pulled down.
+    row = recommendations[0]
+    assert row["forecast_daily_sales"] < 5
+
+
+def test_recommendation_report_includes_forecast_columns_near_order_fields() -> None:
     field_names = [target for _, target in RECOMMENDATION_FIELDS]
 
-    sold7_index = field_names.index("近7日销量")
-    assert field_names[sold7_index + 1 : sold7_index + 4] == [
+    anchor_index = field_names.index("同SKC_SKUID总下单量")
+    assert field_names[anchor_index + 1 : anchor_index + 4] == [
         "预测策略",
         "预测日均销量",
         "预测备货期销量",

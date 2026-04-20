@@ -136,7 +136,7 @@ def run_planner(
     if exit_code != 0:
         raise RuntimeError(f"发货建议程序异常退出，返回码：{exit_code}")
 
-    recommendation = out_dir / "发货建议明细.csv"
+    recommendation = out_dir / "发货建议明细.xlsx"
     quality = out_dir / "数据质量报告.csv"
     summary_path = out_dir / "运行摘要.json"
     missing_files = [
