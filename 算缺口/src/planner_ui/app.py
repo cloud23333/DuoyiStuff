@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, Qt, QThread, QUrl, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication
 from PyQt6.QtWidgets import (
     QApplication,
@@ -18,12 +18,9 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
-
-from shipment_planner.engine import DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY
 
 from planner_ui.workflow import (
     PlannerRunResult,
@@ -40,11 +37,8 @@ class RunRequest:
     orders_path: Path
     sales_path: Path
     output_dir: Path
-    sold30_weight: float
-    sold7_weight: float
     global_gap_multiplier: float
-    zero_sold7_with_sold30_stockout_max_qty: int
-    temu_sales_path: Path | None
+    temu_sales_path: Path
 
 
 class PlannerRunWorker(QObject):
@@ -57,22 +51,14 @@ class PlannerRunWorker(QObject):
         orders_path: Path,
         sales_path: Path,
         output_dir: Path,
-        sold30_weight: float,
-        sold7_weight: float,
         global_gap_multiplier: float,
-        zero_sold7_with_sold30_stockout_max_qty: int,
-        temu_sales_path: Path | None,
+        temu_sales_path: Path,
     ) -> None:
         super().__init__()
         self._orders_path = orders_path
         self._sales_path = sales_path
         self._output_dir = output_dir
-        self._sold30_weight = sold30_weight
-        self._sold7_weight = sold7_weight
         self._global_gap_multiplier = global_gap_multiplier
-        self._zero_sold7_with_sold30_stockout_max_qty = (
-            zero_sold7_with_sold30_stockout_max_qty
-        )
         self._temu_sales_path = temu_sales_path
 
     @pyqtSlot()
@@ -82,12 +68,7 @@ class PlannerRunWorker(QObject):
                 orders_path=self._orders_path,
                 sales_path=self._sales_path,
                 output_dir=self._output_dir,
-                sold30_weight=self._sold30_weight,
-                sold7_weight=self._sold7_weight,
                 global_gap_multiplier=self._global_gap_multiplier,
-                zero_sold7_with_sold30_stockout_max_qty=(
-                    self._zero_sold7_with_sold30_stockout_max_qty
-                ),
                 temu_sales_path=self._temu_sales_path,
             )
         except Exception as exc:  # pragma: no cover - UI error channel
@@ -157,7 +138,7 @@ class PlannerWindow(QMainWindow):
 
         self.temu_path_edit = QLineEdit()
         self.temu_path_edit.setReadOnly(True)
-        self.temu_path_edit.setPlaceholderText(".xlsx Temu销售明细（可选，供后续日销量预测使用）")
+        self.temu_path_edit.setPlaceholderText(".xlsx Temu每日销量文件（必选）")
         self.temu_browse_button = QPushButton("Temu明细")
         self.temu_browse_button.clicked.connect(self._on_pick_temu_sales)
         self.temu_browse_button.setMinimumWidth(92)
@@ -206,24 +187,7 @@ class PlannerWindow(QMainWindow):
         params_grid = QGridLayout()
         params_grid.setHorizontalSpacing(8)
         params_grid.setVerticalSpacing(6)
-        params_grid.setColumnStretch(5, 1)
-
-        self.sold7_weight_spin = QDoubleSpinBox()
-        self.sold7_weight_spin.setDecimals(2)
-        self.sold7_weight_spin.setRange(0.0, 1.0)
-        self.sold7_weight_spin.setSingleStep(0.01)
-        self.sold7_weight_spin.setValue(0.8)
-        self.sold7_weight_spin.setFixedWidth(108)
-
-        self.sold30_weight_spin = QDoubleSpinBox()
-        self.sold30_weight_spin.setDecimals(2)
-        self.sold30_weight_spin.setRange(0.0, 1.0)
-        self.sold30_weight_spin.setSingleStep(0.01)
-        self.sold30_weight_spin.setValue(0.2)
-        self.sold30_weight_spin.setFixedWidth(108)
-
-        self.sold7_weight_spin.valueChanged.connect(self._on_sold7_weight_changed)
-        self.sold30_weight_spin.valueChanged.connect(self._on_sold30_weight_changed)
+        params_grid.setColumnStretch(2, 1)
 
         self.global_gap_multiplier_spin = QDoubleSpinBox()
         self.global_gap_multiplier_spin.setDecimals(2)
@@ -231,14 +195,6 @@ class PlannerWindow(QMainWindow):
         self.global_gap_multiplier_spin.setSingleStep(0.01)
         self.global_gap_multiplier_spin.setValue(1.0)
         self.global_gap_multiplier_spin.setFixedWidth(108)
-
-        self.zero_sold7_stockout_cap_spin = QSpinBox()
-        self.zero_sold7_stockout_cap_spin.setRange(0, 999999)
-        self.zero_sold7_stockout_cap_spin.setSingleStep(1)
-        self.zero_sold7_stockout_cap_spin.setValue(
-            DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY
-        )
-        self.zero_sold7_stockout_cap_spin.setFixedWidth(108)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
@@ -250,22 +206,8 @@ class PlannerWindow(QMainWindow):
         self.run_button.clicked.connect(self._on_run_clicked)
         self.run_button.setMinimumWidth(110)
 
-        weight_link_label = QLabel("↔")
-        weight_link_label.setObjectName("weightLinkLabel")
-        weight_link_label.setToolTip("7日与30日联动，二者之和始终为 1。")
-        weight_link_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        weight_link_label.setFixedWidth(18)
-
-        params_grid.addWidget(QLabel("7日"), 0, 0)
-        params_grid.addWidget(self.sold7_weight_spin, 0, 1)
-        params_grid.addWidget(weight_link_label, 0, 2)
-        params_grid.addWidget(QLabel("30日"), 0, 3)
-        params_grid.addWidget(self.sold30_weight_spin, 0, 4)
-
-        params_grid.addWidget(QLabel("系数"), 1, 0)
-        params_grid.addWidget(self.global_gap_multiplier_spin, 1, 1)
-        params_grid.addWidget(QLabel("保底"), 1, 3)
-        params_grid.addWidget(self.zero_sold7_stockout_cap_spin, 1, 4)
+        params_grid.addWidget(QLabel("缺口系数"), 0, 0)
+        params_grid.addWidget(self.global_gap_multiplier_spin, 0, 1)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -519,10 +461,7 @@ class PlannerWindow(QMainWindow):
             self.output_browse_button,
             self.temu_browse_button,
             self.open_config_dir_button,
-            self.sold7_weight_spin,
-            self.sold30_weight_spin,
             self.global_gap_multiplier_spin,
-            self.zero_sold7_stockout_cap_spin,
             self.clear_log_button,
         ):
             control.setEnabled(not running)
@@ -540,24 +479,6 @@ class PlannerWindow(QMainWindow):
         self.status_label.setText(message)
         color = "#b42318" if error else "#166534"
         self.status_label.setStyleSheet(f"color: {color};")
-
-    @pyqtSlot(float)
-    def _on_sold7_weight_changed(self, value: float) -> None:
-        self._sync_weight_pair(paired_spin=self.sold30_weight_spin, value=value)
-
-    @pyqtSlot(float)
-    def _on_sold30_weight_changed(self, value: float) -> None:
-        self._sync_weight_pair(paired_spin=self.sold7_weight_spin, value=value)
-
-    def _sync_weight_pair(self, *, paired_spin: QDoubleSpinBox, value: float) -> None:
-        normalized = min(max(value, 0.0), 1.0)
-        paired = round(1.0 - normalized, 2)
-        self._set_spin_without_signal(paired_spin, paired)
-
-    def _set_spin_without_signal(self, spin: QDoubleSpinBox, value: float) -> None:
-        spin.blockSignals(True)
-        spin.setValue(value)
-        spin.blockSignals(False)
 
     def _append_log(self, message: str) -> None:
         if not message:
@@ -577,34 +498,29 @@ class PlannerWindow(QMainWindow):
         orders_text = self.order_path_edit.text().strip()
         sales_text = self.sales_path_edit.text().strip()
         output_text = self.output_dir_edit.text().strip()
-        if not orders_text or not sales_text or not output_text:
-            QMessageBox.warning(self, "信息不完整", "请先选择订单文件、销售文件和输出目录。")
+        temu_text = self.temu_path_edit.text().strip()
+        if not orders_text or not sales_text or not temu_text or not output_text:
+            QMessageBox.warning(
+                self,
+                "信息不完整",
+                "请先选择订单文件、销售文件、Temu每日销量文件和输出目录。",
+            )
             return None
 
-        temu_text = self.temu_path_edit.text().strip()
         run_request = RunRequest(
             orders_path=Path(orders_text),
             sales_path=Path(sales_text),
             output_dir=Path(output_text),
-            sold30_weight=float(self.sold30_weight_spin.value()),
-            sold7_weight=float(self.sold7_weight_spin.value()),
             global_gap_multiplier=float(self.global_gap_multiplier_spin.value()),
-            zero_sold7_with_sold30_stockout_max_qty=int(
-                self.zero_sold7_stockout_cap_spin.value()
-            ),
-            temu_sales_path=Path(temu_text) if temu_text else None,
+            temu_sales_path=Path(temu_text),
         )
 
         validation_error = self._validate_run_inputs(
             orders_path=run_request.orders_path,
             sales_path=run_request.sales_path,
+            temu_sales_path=run_request.temu_sales_path,
             output_dir=run_request.output_dir,
-            sold30_weight=run_request.sold30_weight,
-            sold7_weight=run_request.sold7_weight,
             global_gap_multiplier=run_request.global_gap_multiplier,
-            zero_sold7_with_sold30_stockout_max_qty=(
-                run_request.zero_sold7_with_sold30_stockout_max_qty
-            ),
         )
         if validation_error is not None:
             self._set_status(validation_error, error=True)
@@ -623,12 +539,7 @@ class PlannerWindow(QMainWindow):
             orders_path=run_request.orders_path,
             sales_path=run_request.sales_path,
             output_dir=run_request.output_dir,
-            sold30_weight=run_request.sold30_weight,
-            sold7_weight=run_request.sold7_weight,
             global_gap_multiplier=run_request.global_gap_multiplier,
-            zero_sold7_with_sold30_stockout_max_qty=(
-                run_request.zero_sold7_with_sold30_stockout_max_qty
-            ),
             temu_sales_path=run_request.temu_sales_path,
         )
         self._run_worker.moveToThread(self._run_thread)
@@ -721,18 +632,22 @@ class PlannerWindow(QMainWindow):
     def _inputs_ready_for_run(self) -> bool:
         orders_text = self.order_path_edit.text().strip()
         sales_text = self.sales_path_edit.text().strip()
+        temu_text = self.temu_path_edit.text().strip()
         output_text = self.output_dir_edit.text().strip()
-        if not orders_text or not sales_text or not output_text:
+        if not orders_text or not sales_text or not temu_text or not output_text:
             return False
 
         orders_path = Path(orders_text)
         sales_path = Path(sales_text)
+        temu_path = Path(temu_text)
         output_path = Path(output_text)
         return (
             orders_path.is_file()
             and sales_path.is_file()
+            and temu_path.is_file()
             and orders_path.suffix.lower() == ".xlsx"
             and sales_path.suffix.lower() == ".xlsx"
+            and temu_path.suffix.lower() == ".xlsx"
             and (output_path.is_dir() or not output_path.exists())
         )
 
@@ -746,11 +661,9 @@ class PlannerWindow(QMainWindow):
         *,
         orders_path: Path,
         sales_path: Path,
+        temu_sales_path: Path,
         output_dir: Path,
-        sold30_weight: float,
-        sold7_weight: float,
         global_gap_multiplier: float,
-        zero_sold7_with_sold30_stockout_max_qty: int,
     ) -> str | None:
         if not orders_path.exists():
             return f"订单文件不存在：{orders_path}"
@@ -766,18 +679,17 @@ class PlannerWindow(QMainWindow):
         if sales_path.suffix.lower() != ".xlsx":
             return f"销售文件不是 xlsx 格式：{sales_path}"
 
+        if not temu_sales_path.exists():
+            return f"Temu每日销量文件不存在：{temu_sales_path}"
+        if not temu_sales_path.is_file():
+            return f"Temu每日销量路径不是文件：{temu_sales_path}"
+        if temu_sales_path.suffix.lower() != ".xlsx":
+            return f"Temu每日销量文件不是 xlsx 格式：{temu_sales_path}"
+
         if output_dir.exists() and not output_dir.is_dir():
             return f"输出路径不是目录：{output_dir}"
-        if sold30_weight < 0 or sold7_weight < 0:
-            return "7天和30天销量占比不能为负数。"
-        if sold30_weight > 1 or sold7_weight > 1:
-            return "7天和30天销量占比不能大于 1。"
-        if abs((sold30_weight + sold7_weight) - 1.0) > 0.0001:
-            return "7天和30天销量占比之和必须为 1。"
         if global_gap_multiplier <= 0:
             return "全局缺口上浮系数必须大于 0。"
-        if zero_sold7_with_sold30_stockout_max_qty < 0:
-            return "保底不能为负数。"
         return None
 
 
@@ -811,10 +723,6 @@ def _app_stylesheet() -> str:
     }
     QLabel#skcCountLabel {
         font-weight: 600;
-    }
-    QLabel#weightLinkLabel {
-        font-weight: 700;
-        color: #64748b;
     }
     QPlainTextEdit#skcTextEdit,
     QPlainTextEdit#logTextEdit {

@@ -35,3 +35,17 @@ def test_parse_temu_daily_sales_sums_duplicate_keys_in_date_order() -> None:
     ]
 
     assert parse_temu_daily_sales(rows) == {("skc-1", "sku-1"): (6, 4)}
+
+
+def test_parse_temu_daily_sales_requires_identity_columns() -> None:
+    rows = [{"平台SKC_ID": "skc-1", "4月1日销量": "1"}]
+
+    with pytest.raises(ValueError, match="Missing required columns in Temu daily sales file"):
+        parse_temu_daily_sales(rows)
+
+
+def test_parse_temu_daily_sales_requires_daily_sales_columns() -> None:
+    rows = [{"平台SKC_ID": "skc-1", "平台SKU_ID": "sku-1"}]
+
+    with pytest.raises(ValueError, match="Temu daily sales file has no daily sales columns"):
+        parse_temu_daily_sales(rows)

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 import math
+import statistics
 
 from .allocation import allocate_recommendation_quantities
-from .models import KeyState, OrderLine, SalesRecord
+from .models import ForecastMetrics, KeyState, OrderLine, SalesRecord
 from .parsers import normalize_sku_code
 from .post_processing import (
     apply_small_change_keep_rule,
@@ -19,41 +20,27 @@ from .post_processing import (
 )
 from .summary import build_summary
 
-DEFAULT_SOLD30_WEIGHT = 0.2
-DEFAULT_SOLD7_WEIGHT = 0.8
-DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY = 5
-SOLD30_WINDOW_DAYS = 30.0
-SOLD7_WINDOW_DAYS = 7.0
 HOT_STYLE_GAP_MULTIPLIER = 1.2
 DEFAULT_GLOBAL_GAP_MULTIPLIER = 1.0
 SMALL_CHANGE_KEEP_RATIO = 0.3
+FORECAST_STRATEGY_CONSERVATIVE = "保守"
+FORECAST_STRATEGY_NORMAL = "正常"
+FORECAST_STRATEGY_AGGRESSIVE = "激进"
 
 
 def build_recommendations(
     order_lines: list[OrderLine],
     sales_records: list[SalesRecord],
     min_order_ship_qty: int = 10,
-    zero_sold7_with_sold30_stockout_max_qty: int = (
-        DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY
-    ),
     sku_order_max_qty: dict[str, int] | None = None,
     exclude_skc: set[str] | None = None,
     exclude_skuid: set[str] | None = None,
     shipping_in_progress_by_key: dict[tuple[str, str], int] | None = None,
     global_gap_multiplier: float = DEFAULT_GLOBAL_GAP_MULTIPLIER,
-    sold30_weight: float = DEFAULT_SOLD30_WEIGHT,
-    sold7_weight: float = DEFAULT_SOLD7_WEIGHT,
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
     if global_gap_multiplier <= 0:
         raise ValueError("global_gap_multiplier must be greater than 0.")
-    if zero_sold7_with_sold30_stockout_max_qty < 0:
-        raise ValueError(
-            "zero_sold7_with_sold30_stockout_max_qty must be non-negative."
-        )
-    normalized_sold30_weight, normalized_sold7_weight = _normalize_sales_weights(
-        sold30_weight,
-        sold7_weight,
-    )
 
     ordered_lines = sorted(order_lines, key=lambda line: line.row_number)
     normalized_sku_limits = _normalize_sku_limits(sku_order_max_qty)
@@ -61,17 +48,14 @@ def build_recommendations(
     normalized_exclude_skuid = _normalize_excluded_codes(exclude_skuid)
     sales_by_key, duplicate_keys = _build_sales_lookup(sales_records)
     key_demand = _build_key_demand(ordered_lines)
+    _validate_daily_sales_for_demand(key_demand, daily_sales_by_key)
     shipping_in_progress_lookup = shipping_in_progress_by_key or {}
     key_states = _build_key_states(
         key_demand=key_demand,
         sales_by_key=sales_by_key,
+        daily_sales_by_key=daily_sales_by_key or {},
         shipping_in_progress_by_key=shipping_in_progress_lookup,
         global_gap_multiplier=global_gap_multiplier,
-        sold30_weight=normalized_sold30_weight,
-        sold7_weight=normalized_sold7_weight,
-        zero_sold7_with_sold30_stockout_max_qty=(
-            zero_sold7_with_sold30_stockout_max_qty
-        ),
     )
     suggested_by_row, sku_order_limit_capped_rows = (
         allocate_recommendation_quantities(
@@ -111,6 +95,11 @@ def build_recommendations(
         key_order_qty = state.order_qty_total if state is not None else line.quantity
         key_recommended_total = key_recommended_totals.get(key, 0)
         gap = state.gap if state is not None else 0
+        forecast_metrics = (
+            state.forecast_metrics
+            if state is not None
+            else ForecastMetrics("", 0.0, 0.0)
+        )
         is_min_order_ship_qty_exempt_eligible = (
             state.min_order_ship_qty_exempt_eligible if state is not None else False
         )
@@ -143,6 +132,13 @@ def build_recommendations(
                 "key_order_qty": key_order_qty,
                 "sold30": sold30,
                 "sold7": sold7,
+                "forecast_strategy": forecast_metrics.strategy,
+                "forecast_daily_sales": round_qty(
+                    forecast_metrics.forecast_daily_sales
+                ),
+                "forecast_stocking_period_sales": round_qty(
+                    forecast_metrics.forecast_stocking_period_sales
+                ),
                 "stocking_days": round_qty(stocking_days),
                 "wh": round_qty(stock_in_warehouse),
                 "pending_recv": round_qty(pending_receive),
@@ -209,11 +205,6 @@ def build_recommendations(
         intercepted_orders=intercept_stats.get("intercepted_orders", 0),
         small_change_kept_lines=small_change_stats.get("small_change_kept_lines", 0),
         global_gap_multiplier=global_gap_multiplier,
-        sold30_weight=normalized_sold30_weight,
-        sold7_weight=normalized_sold7_weight,
-        zero_sold7_with_sold30_stockout_max_qty=(
-            zero_sold7_with_sold30_stockout_max_qty
-        ),
     )
     return recommendations, quality_rows, summary
 
@@ -234,16 +225,18 @@ def _normalize_excluded_codes(codes: set[str] | None) -> set[str]:
     return {code.strip() for code in (codes or set()) if code.strip()}
 
 
-def _normalize_sales_weights(
-    sold30_weight: float,
-    sold7_weight: float,
-) -> tuple[float, float]:
-    if sold30_weight < 0 or sold7_weight < 0:
-        raise ValueError("sold30_weight and sold7_weight must be non-negative.")
-    weight_total = sold30_weight + sold7_weight
-    if weight_total <= 0:
-        raise ValueError("sold30_weight and sold7_weight cannot both be 0.")
-    return sold30_weight / weight_total, sold7_weight / weight_total
+def _validate_daily_sales_for_demand(
+    key_demand: dict[tuple[str, str], int],
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None,
+) -> None:
+    if daily_sales_by_key is None:
+        raise ValueError("daily sales data is required.")
+
+    for skc, skuid in key_demand:
+        if (skc, skuid) not in daily_sales_by_key:
+            raise ValueError(f"Missing daily sales data for (SKC, SKUID): {skc}, {skuid}")
+        if not daily_sales_by_key[(skc, skuid)]:
+            raise ValueError(f"Empty daily sales sequence for (SKC, SKUID): {skc}, {skuid}")
 
 
 def _build_intercept_reason_by_row(
@@ -426,11 +419,9 @@ def _build_key_demand(order_lines: list[OrderLine]) -> dict[tuple[str, str], int
 def _build_key_states(
     key_demand: dict[tuple[str, str], int],
     sales_by_key: dict[tuple[str, str], SalesRecord],
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
     shipping_in_progress_by_key: dict[tuple[str, str], int],
     global_gap_multiplier: float,
-    sold30_weight: float,
-    sold7_weight: float,
-    zero_sold7_with_sold30_stockout_max_qty: int,
 ) -> dict[tuple[str, str], KeyState]:
     states: dict[tuple[str, str], KeyState] = {}
     for key, order_qty_total in key_demand.items():
@@ -444,38 +435,29 @@ def _build_key_states(
                 order_qty_total=order_qty_total,
                 gap=0,
                 recommended_qty_total=0,
+                forecast_metrics=ForecastMetrics("", 0.0, 0.0),
                 min_order_ship_qty_exempt_eligible=False,
             )
             continue
 
         shipping_in_progress = shipping_in_progress_by_key.get(key, 0)
-        target_ship_qty = _target_ship_qty(
-            sold30=sales.sold30,
-            sold7=sales.sold7,
+        forecast_metrics = _forecast_metrics(
+            daily_sales=daily_sales_by_key[key],
             stocking_days=sales.stocking_days,
-            sold30_weight=sold30_weight,
-            sold7_weight=sold7_weight,
+            is_hot_style=sales.is_hot_style,
         )
         available_stock = (
             sales.stock_in_warehouse + sales.pending_receive + shipping_in_progress
         )
         raw_gap = max(
             0.0,
-            target_ship_qty - available_stock,
+            forecast_metrics.forecast_stocking_period_sales - available_stock,
         )
         if sales.is_hot_style:
             raw_gap *= HOT_STYLE_GAP_MULTIPLIER
         raw_gap *= global_gap_multiplier
         gap = math.ceil(raw_gap)
         recommended_qty_total = min(order_qty_total, gap)
-        is_min_order_ship_qty_exempt_eligible = (
-            sales.sold7 == 0 and sales.sold30 > 0 and available_stock == 0
-        )
-        if is_min_order_ship_qty_exempt_eligible:
-            recommended_qty_total = min(
-                order_qty_total,
-                zero_sold7_with_sold30_stockout_max_qty,
-            )
         states[key] = KeyState(
             skc=skc,
             skuid=skuid,
@@ -483,18 +465,118 @@ def _build_key_states(
             order_qty_total=order_qty_total,
             gap=gap,
             recommended_qty_total=recommended_qty_total,
-            min_order_ship_qty_exempt_eligible=is_min_order_ship_qty_exempt_eligible,
+            forecast_metrics=forecast_metrics,
+            min_order_ship_qty_exempt_eligible=False,
         )
     return states
 
 
-def _target_ship_qty(
-    sold30: int,
-    sold7: int,
+def _forecast_metrics(
+    *,
+    daily_sales: tuple[int, ...],
     stocking_days: float,
-    sold30_weight: float,
-    sold7_weight: float,
+    is_hot_style: bool,
+) -> ForecastMetrics:
+    values = [max(0, int(value)) for value in daily_sales]
+    mean_daily = statistics.fmean(values)
+    median_daily = float(statistics.median(values))
+    recent_7_avg = _average_recent(values, 7)
+    recent_3_avg = _average_recent(values, 3)
+    trimmed_mean = _trimmed_mean(values)
+    volatility = _volatility(values, mean_daily)
+    isolated_spike = _has_isolated_recent_spike(values, median_daily, recent_7_avg)
+
+    strategy = _forecast_strategy(
+        median_daily=median_daily,
+        recent_7_avg=recent_7_avg,
+        recent_3_avg=recent_3_avg,
+        volatility=volatility,
+        isolated_spike=isolated_spike,
+        is_hot_style=is_hot_style,
+    )
+    forecast_daily_sales = _forecast_daily_sales(
+        strategy=strategy,
+        median_daily=median_daily,
+        recent_7_avg=recent_7_avg,
+        recent_3_avg=recent_3_avg,
+        trimmed_mean=trimmed_mean,
+    )
+    forecast_stocking_period_sales = forecast_daily_sales * max(0.0, stocking_days)
+    return ForecastMetrics(
+        strategy=strategy,
+        forecast_daily_sales=forecast_daily_sales,
+        forecast_stocking_period_sales=forecast_stocking_period_sales,
+    )
+
+
+def _average_recent(values: list[int], days: int) -> float:
+    window = values[-days:]
+    return statistics.fmean(window) if window else 0.0
+
+
+def _trimmed_mean(values: list[int]) -> float:
+    if len(values) < 5:
+        return statistics.fmean(values)
+    ordered = sorted(values)
+    return statistics.fmean(ordered[1:-1])
+
+
+def _volatility(values: list[int], mean_daily: float) -> float:
+    if len(values) < 2 or mean_daily <= 0:
+        return 0.0
+    return statistics.pstdev(values) / mean_daily
+
+
+def _has_isolated_recent_spike(
+    values: list[int],
+    median_daily: float,
+    recent_7_avg: float,
+) -> bool:
+    if len(values) < 3:
+        return False
+    recent = values[-3:]
+    recent_max = max(recent)
+    baseline = max(1.0, median_daily, recent_7_avg)
+    if recent_max < baseline * 3:
+        return False
+    remaining = list(recent)
+    remaining.remove(recent_max)
+    return statistics.fmean(remaining) <= max(1.0, median_daily * 1.2)
+
+
+def _forecast_strategy(
+    *,
+    median_daily: float,
+    recent_7_avg: float,
+    recent_3_avg: float,
+    volatility: float,
+    isolated_spike: bool,
+    is_hot_style: bool,
+) -> str:
+    baseline = max(1.0, median_daily)
+    if recent_3_avg < baseline * 0.6:
+        return FORECAST_STRATEGY_CONSERVATIVE
+    if volatility > 1.2 or isolated_spike:
+        return FORECAST_STRATEGY_CONSERVATIVE
+    if recent_3_avg > baseline * 1.5:
+        return FORECAST_STRATEGY_AGGRESSIVE
+    if is_hot_style and recent_7_avg >= baseline:
+        return FORECAST_STRATEGY_AGGRESSIVE
+    return FORECAST_STRATEGY_NORMAL
+
+
+def _forecast_daily_sales(
+    *,
+    strategy: str,
+    median_daily: float,
+    recent_7_avg: float,
+    recent_3_avg: float,
+    trimmed_mean: float,
 ) -> float:
-    sold30_daily = (sold30_weight * sold30) / SOLD30_WINDOW_DAYS
-    sold7_daily = (sold7_weight * sold7) / SOLD7_WINDOW_DAYS
-    return (sold30_daily + sold7_daily) * stocking_days
+    if strategy == FORECAST_STRATEGY_CONSERVATIVE:
+        return min(median_daily, recent_7_avg, trimmed_mean)
+    if strategy == FORECAST_STRATEGY_AGGRESSIVE:
+        forecast = (recent_7_avg * 0.7) + (recent_3_avg * 0.3)
+        cap = max(median_daily * 2.0, recent_7_avg * 1.2)
+        return min(forecast, cap)
+    return (median_daily * 0.5) + (recent_7_avg * 0.5)

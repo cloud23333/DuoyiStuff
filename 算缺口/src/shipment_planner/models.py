@@ -33,6 +33,13 @@ class SalesRecord:
 
 
 @dataclass(slots=True)
+class ForecastMetrics:
+    strategy: str
+    forecast_daily_sales: float
+    forecast_stocking_period_sales: float
+
+
+@dataclass(slots=True)
 class KeyState:
     skc: str
     skuid: str
@@ -40,4 +47,5 @@ class KeyState:
     order_qty_total: int
     gap: int
     recommended_qty_total: int
+    forecast_metrics: ForecastMetrics
     min_order_ship_qty_exempt_eligible: bool

@@ -5,22 +5,19 @@ from pathlib import Path
 from typing import TypeAlias
 
 from .constraints import DEFAULT_CONSTRAINTS_FILENAME, load_constraints
-from .engine import (
-    DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
-    DEFAULT_SOLD30_WEIGHT,
-    DEFAULT_SOLD7_WEIGHT,
-    build_recommendations,
-)
+from .engine import build_recommendations
 from .parsers import (
     ORDER_REQUIRED_COLUMNS,
     SALES_REQUIRED_COLUMNS,
     TEMU_DAILY_REQUIRED_COLUMNS,
     assert_required_columns,
+    assert_temu_daily_sales_columns,
     assert_xlsx,
     missing_required_columns,
     parse_orders,
     parse_sales,
     parse_temu_daily_sales,
+    temu_daily_sales_columns,
 )
 from .reports import export_reports
 from .xlsx_reader import read_xlsx_table
@@ -35,7 +32,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sales", help="Sales xlsx path (optional with auto-detect)")
     parser.add_argument(
         "--temu-sales",
-        help="Temu daily sales xlsx path (optional; parsed for future daily forecasting)",
+        help="Temu daily sales xlsx path (required for daily-sales forecasting)",
     )
     parser.add_argument(
         "--input-dir",
@@ -65,27 +62,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Global multiplier applied to key gaps after hot-style rule (default: 1.0)",
-    )
-    parser.add_argument(
-        "--sold30-weight",
-        type=float,
-        default=DEFAULT_SOLD30_WEIGHT,
-        help=f"Weight for sold30 in blended demand (default: {DEFAULT_SOLD30_WEIGHT})",
-    )
-    parser.add_argument(
-        "--sold7-weight",
-        type=float,
-        default=DEFAULT_SOLD7_WEIGHT,
-        help=f"Weight for sold7 in blended demand (default: {DEFAULT_SOLD7_WEIGHT})",
-    )
-    parser.add_argument(
-        "--zero-sold7-with-sold30-stockout-max-qty",
-        type=int,
-        default=DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
-        help=(
-            "Max suggested qty when sold7=0, sold30>0, and available stock is 0 "
-            f"(default: {DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY})"
-        ),
     )
     return parser
 
@@ -122,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.sales is None:
         print(f"Auto-selected sales file: {sales_path}")
 
-    # Resolve optional Temu daily sales file
+    # Resolve required Temu daily sales file.
     temu_sales_path: Path | None = None
     if args.temu_sales is not None:
         temu_sales_path = Path(args.temu_sales)
@@ -131,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         temu_sales_path = _try_auto_detect_temu(candidates, header_cache)
         if temu_sales_path is not None:
             print(f"Auto-selected Temu daily sales file: {temu_sales_path}")
+    if temu_sales_path is None:
+        raise ValueError("Temu daily sales file is required.")
 
     cached_orders = header_cache.get(orders_path)
     order_header, order_rows = cached_orders if cached_orders is not None else read_xlsx_table(orders_path)
@@ -143,12 +121,13 @@ def main(argv: list[str] | None = None) -> int:
     order_lines, shipping_in_progress_by_key = parse_orders(order_rows)
     sales_records = parse_sales(sales_rows)
 
-    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None = None
-    if temu_sales_path is not None:
-        cached_temu = header_cache.get(temu_sales_path)
-        _, temu_rows = cached_temu if cached_temu is not None else read_xlsx_table(temu_sales_path)
-        daily_sales_by_key = parse_temu_daily_sales(temu_rows)
-        print(f"Loaded Temu daily sales: {len(daily_sales_by_key)} SKUs")
+    cached_temu = header_cache.get(temu_sales_path)
+    temu_header, temu_rows = (
+        cached_temu if cached_temu is not None else read_xlsx_table(temu_sales_path)
+    )
+    assert_temu_daily_sales_columns(temu_header, "Temu daily sales file")
+    daily_sales_by_key = parse_temu_daily_sales(temu_rows)
+    print(f"Loaded Temu daily sales: {len(daily_sales_by_key)} SKUs")
     constraints_path = (
         Path(args.constraints)
         if args.constraints is not None
@@ -164,16 +143,12 @@ def main(argv: list[str] | None = None) -> int:
         order_lines,
         sales_records,
         min_order_ship_qty=args.min_order_ship_qty,
-        zero_sold7_with_sold30_stockout_max_qty=(
-            args.zero_sold7_with_sold30_stockout_max_qty
-        ),
         sku_order_max_qty=sku_order_max_qty,
         exclude_skc=exclude_skc,
         exclude_skuid=exclude_skuid,
         shipping_in_progress_by_key=shipping_in_progress_by_key,
         global_gap_multiplier=global_gap_multiplier,
-        sold30_weight=args.sold30_weight,
-        sold7_weight=args.sold7_weight,
+        daily_sales_by_key=daily_sales_by_key,
     )
     outputs = export_reports(args.out_dir, recommendations, quality_rows, summary)
 
@@ -261,7 +236,10 @@ def _try_auto_detect_temu(
         header = _cached_header(candidate, header_cache)
         if header is None:
             continue
-        if _contains_all_required_columns(header, TEMU_DAILY_REQUIRED_COLUMNS):
+        if (
+            _contains_all_required_columns(header, TEMU_DAILY_REQUIRED_COLUMNS)
+            and temu_daily_sales_columns(header)
+        ):
             return candidate
     return None
 
@@ -284,15 +262,6 @@ def _print_run_summary(
     print(f"Recommended qty: {summary['total_recommended_qty']}")
     print(f"30%-change keep lines: {summary['small_change_kept_lines']}")
     print(f"Global gap multiplier: {summary['global_gap_multiplier']}")
-    print(
-        "Sales weights: "
-        f"sold30={summary['sold30_weight']}, "
-        f"sold7={summary['sold7_weight']}"
-    )
-    print(
-        "Zero-sold7 stockout cap: "
-        f"{summary['zero_sold7_with_sold30_stockout_max_qty']}"
-    )
     print(f"Min order ship qty threshold: {summary['min_order_ship_qty_threshold']}")
     print(f"Low-qty orders before exemption: {summary['low_qty_orders_before_exempt']}")
     print(f"Low-qty orders exempted: {summary['low_qty_orders_exempted']}")

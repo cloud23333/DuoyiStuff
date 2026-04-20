@@ -10,12 +10,13 @@ import sys
 
 from shipment_planner.cli import main as planner_cli_main
 from shipment_planner.constraints import DEFAULT_CONSTRAINTS_FILENAME
-from shipment_planner.engine import DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY
 from shipment_planner.parsers import (
     ORDER_REQUIRED_COLUMNS,
     SALES_REQUIRED_COLUMNS,
+    TEMU_DAILY_REQUIRED_COLUMNS,
     describe_required_column,
     missing_required_columns,
+    temu_daily_sales_columns,
 )
 from shipment_planner.xlsx_reader import read_xlsx_table
 
@@ -84,18 +85,17 @@ def run_planner(
     orders_path: str | Path,
     sales_path: str | Path,
     output_dir: str | Path,
-    sold30_weight: float,
-    sold7_weight: float,
     global_gap_multiplier: float,
-    zero_sold7_with_sold30_stockout_max_qty: int = DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
-    temu_sales_path: str | Path | None = None,
+    temu_sales_path: str | Path,
 ) -> PlannerRunResult:
     orders = Path(orders_path)
     sales = Path(sales_path)
+    temu_sales = Path(temu_sales_path)
     base_output_dir = Path(output_dir)
     input_specs = (
         (orders, ORDER_REQUIRED_COLUMNS, "订单文件"),
         (sales, SALES_REQUIRED_COLUMNS, "销售文件"),
+        (temu_sales, TEMU_DAILY_REQUIRED_COLUMNS, "Temu每日销量文件"),
     )
 
     for file_path, _, label in input_specs:
@@ -107,6 +107,9 @@ def run_planner(
         header, _ = read_xlsx_table(file_path)
         headers.append(header)
     for header, (_, required_columns, label) in zip(headers, input_specs):
+        if label == "Temu每日销量文件":
+            _assert_temu_daily_columns(header)
+            continue
         _assert_required_columns(header, required_columns, label)
 
     out_dir = _prepare_run_output_dir(base_output_dir)
@@ -121,17 +124,11 @@ def run_planner(
         str(out_dir),
         "--constraints",
         str(constraints_path),
-        "--sold30-weight",
-        str(sold30_weight),
-        "--sold7-weight",
-        str(sold7_weight),
         "--global-gap-multiplier",
         str(global_gap_multiplier),
-        "--zero-sold7-with-sold30-stockout-max-qty",
-        str(zero_sold7_with_sold30_stockout_max_qty),
+        "--temu-sales",
+        str(temu_sales),
     ]
-    if temu_sales_path is not None:
-        args += ["--temu-sales", str(temu_sales_path)]
 
     stdout_buffer = io.StringIO()
     with contextlib.redirect_stdout(stdout_buffer):
@@ -186,6 +183,12 @@ def _assert_required_columns(header: list[str], required: list[str], label: str)
         raise ValueError(f"{label}缺少必填列：{details}")
 
 
+def _assert_temu_daily_columns(header: list[str]) -> None:
+    _assert_required_columns(header, TEMU_DAILY_REQUIRED_COLUMNS, "Temu每日销量文件")
+    if not temu_daily_sales_columns(header):
+        raise ValueError("Temu每日销量文件缺少日期销量列。")
+
+
 def _build_localized_console_output(
     *,
     summary_path: Path,
@@ -206,9 +209,6 @@ def _build_localized_console_output(
     total_recommended = summary_value("建议发货总量")
     small_change_kept_lines = summary_value("触发30%免改行数")
     global_gap_multiplier = summary_value("全局缺口上浮系数")
-    sold30_weight = summary_value("近30日销量占比")
-    sold7_weight = summary_value("近7日销量占比")
-    zero_sold7_stockout_cap = summary_value("零7日销量且30日有销量无库存发货上限")
     min_order_ship_qty = summary_value("最小发货阈值")
     low_qty_orders_before_exempt = summary_value("阈值前低发货量订单数")
     low_qty_orders = summary_value("低于阈值订单数_提示")
@@ -229,8 +229,6 @@ def _build_localized_console_output(
         f"建议发货数量：{total_recommended}",
         f"30%变动保留行数：{small_change_kept_lines}",
         f"全局缺口倍率：{global_gap_multiplier}",
-        f"销量权重：sold30={sold30_weight}, sold7={sold7_weight}",
-        f"零7日销量且30日有销量无库存发货上限：{zero_sold7_stockout_cap}",
         f"最小发货阈值：{min_order_ship_qty}",
         f"阈值前低发货量订单数：{low_qty_orders_before_exempt}",
         f"低发货量豁免订单数：{low_qty_orders_exempted}",

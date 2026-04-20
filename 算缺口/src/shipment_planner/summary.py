@@ -22,9 +22,6 @@ def build_summary(
     intercepted_orders: int,
     small_change_kept_lines: int,
     global_gap_multiplier: float,
-    sold30_weight: float,
-    sold7_weight: float,
-    zero_sold7_with_sold30_stockout_max_qty: int,
 ) -> dict[str, object]:
     order_line_count = len(order_lines)
     matched_count = sum(
@@ -65,11 +62,6 @@ def build_summary(
         "intercepted_orders": intercepted_orders,
         "small_change_kept_lines": small_change_kept_lines,
         "global_gap_multiplier": round_qty(global_gap_multiplier),
-        "sold30_weight": round_qty(sold30_weight),
-        "sold7_weight": round_qty(sold7_weight),
-        "zero_sold7_with_sold30_stockout_max_qty": (
-            zero_sold7_with_sold30_stockout_max_qty
-        ),
         "low_qty_orders_before_exempt": threshold_stats.get(
             "low_qty_orders_before_exempt",
             0,

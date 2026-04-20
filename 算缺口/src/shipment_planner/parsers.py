@@ -258,6 +258,19 @@ def _temu_date_sort_key(col: str) -> tuple[int, int]:
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
+def temu_daily_sales_columns(header: list[str]) -> list[str]:
+    return sorted(
+        [column_name for column_name in header if _TEMU_DAILY_COL_RE.match(column_name)],
+        key=_temu_date_sort_key,
+    )
+
+
+def assert_temu_daily_sales_columns(header: list[str], file_label: str) -> None:
+    assert_required_columns(header, TEMU_DAILY_REQUIRED_COLUMNS, file_label)
+    if not temu_daily_sales_columns(header):
+        raise ValueError(f"{file_label} has no daily sales columns")
+
+
 def parse_temu_daily_sales(
     rows: list[dict[str, str]],
 ) -> dict[tuple[str, str], tuple[int, ...]]:
@@ -266,14 +279,9 @@ def parse_temu_daily_sales(
     Returns a mapping of (平台SKC_ID, 平台SKU_ID) → daily sales tuple (oldest → newest).
     Rows sharing the same key (different shops) are summed.
     """
-    if not rows:
-        return {}
-
-    all_cols = list(rows[0].keys())
-    date_cols = sorted(
-        [c for c in all_cols if _TEMU_DAILY_COL_RE.match(c)],
-        key=_temu_date_sort_key,
-    )
+    all_cols = list(dict.fromkeys(column_name for row in rows for column_name in row))
+    assert_temu_daily_sales_columns(all_cols, "Temu daily sales file")
+    date_cols = temu_daily_sales_columns(all_cols)
 
     result: dict[tuple[str, str], tuple[int, ...]] = {}
     for row in rows:
