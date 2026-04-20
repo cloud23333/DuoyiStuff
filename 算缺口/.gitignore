@@ -29,10 +29,8 @@ dist/
 Thumbs.db
 *.swp
 
-# Shipment planning inputs and generated outputs
-*.xlsx
+# Shipment planning generated outputs
 *.csv
-data/input/*.json
 data/output/
 
 # Markdown docs: keep only README.md
