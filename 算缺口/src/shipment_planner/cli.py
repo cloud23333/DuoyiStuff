@@ -9,7 +9,6 @@ from .engine import (
     DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
     DEFAULT_SOLD30_WEIGHT,
     DEFAULT_SOLD7_WEIGHT,
-    DEFAULT_TREND_RECENT_DAYS,
     build_recommendations,
 )
 from .parsers import (
@@ -36,7 +35,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sales", help="Sales xlsx path (optional with auto-detect)")
     parser.add_argument(
         "--temu-sales",
-        help="Temu daily sales xlsx path (optional; enables trend adjustment)",
+        help="Temu daily sales xlsx path (optional; parsed for future daily forecasting)",
     )
     parser.add_argument(
         "--input-dir",
@@ -86,15 +85,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Max suggested qty when sold7=0, sold30>0, and available stock is 0 "
             f"(default: {DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY})"
-        ),
-    )
-    parser.add_argument(
-        "--trend-recent-days",
-        type=int,
-        default=DEFAULT_TREND_RECENT_DAYS,
-        help=(
-            "Number of recent complete days used for trend adjustment when --temu-sales is "
-            f"provided; max 6 as today's data is always excluded (default: {DEFAULT_TREND_RECENT_DAYS})"
         ),
     )
     return parser
@@ -158,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
         cached_temu = header_cache.get(temu_sales_path)
         _, temu_rows = cached_temu if cached_temu is not None else read_xlsx_table(temu_sales_path)
         daily_sales_by_key = parse_temu_daily_sales(temu_rows)
-        print(f"Loaded Temu daily sales: {len(daily_sales_by_key)} SKUs (trend-recent-days={args.trend_recent_days})")
+        print(f"Loaded Temu daily sales: {len(daily_sales_by_key)} SKUs")
     constraints_path = (
         Path(args.constraints)
         if args.constraints is not None
@@ -184,8 +174,6 @@ def main(argv: list[str] | None = None) -> int:
         global_gap_multiplier=global_gap_multiplier,
         sold30_weight=args.sold30_weight,
         sold7_weight=args.sold7_weight,
-        daily_sales_by_key=daily_sales_by_key,
-        trend_recent_days=args.trend_recent_days,
     )
     outputs = export_reports(args.out_dir, recommendations, quality_rows, summary)
 

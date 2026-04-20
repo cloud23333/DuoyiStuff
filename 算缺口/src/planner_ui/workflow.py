@@ -10,10 +10,7 @@ import sys
 
 from shipment_planner.cli import main as planner_cli_main
 from shipment_planner.constraints import DEFAULT_CONSTRAINTS_FILENAME
-from shipment_planner.engine import (
-    DEFAULT_TREND_RECENT_DAYS,
-    DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
-)
+from shipment_planner.engine import DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY
 from shipment_planner.parsers import (
     ORDER_REQUIRED_COLUMNS,
     SALES_REQUIRED_COLUMNS,
@@ -92,7 +89,6 @@ def run_planner(
     global_gap_multiplier: float,
     zero_sold7_with_sold30_stockout_max_qty: int = DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
     temu_sales_path: str | Path | None = None,
-    trend_recent_days: int = DEFAULT_TREND_RECENT_DAYS,
 ) -> PlannerRunResult:
     orders = Path(orders_path)
     sales = Path(sales_path)
@@ -133,8 +129,6 @@ def run_planner(
         str(global_gap_multiplier),
         "--zero-sold7-with-sold30-stockout-max-qty",
         str(zero_sold7_with_sold30_stockout_max_qty),
-        "--trend-recent-days",
-        str(trend_recent_days),
     ]
     if temu_sales_path is not None:
         args += ["--temu-sales", str(temu_sales_path)]

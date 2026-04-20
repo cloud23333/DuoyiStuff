@@ -111,7 +111,7 @@ UI 说明：
 
 支持三类规则：
 
-- `sku_order_max_qty`：按 `(内部订单号, SKU)` 限制建议数量
+- `sku_order_max_qty`：按 `(内部订单号, SKU)` 限制建议数量；该上限优先级高于 30% 免改规则
 - `exclude_skc`：命中 `店铺款式编码` 时强制建议量为 0
 - `exclude_skuid`：命中 `店铺商品编码` 时强制建议量为 0
 
@@ -136,7 +136,7 @@ UI 说明：
 
 - CLI：未传 `--constraints` 时，自动尝试读取 `data/input/shipment_constraints.json`
 - UI（源码运行）：使用仓库内 `data/input/shipment_constraints.json`
-- EXE：使用可执行文件所在目录的 `data/input/shipment_constraints.json`；首次启动若不存在会自动创建模板
+- EXE：使用可执行文件所在目录的 `shipment_constraints.json`；首次启动若不存在会自动创建模板
 
 ## 业务规则与字段要求
 
@@ -156,7 +156,7 @@ UI 说明：
 - 可用库存使用 `平台仓内库存 + 平台待收货库存 + 发货中数量`
 - 热销款缺口上浮 `1.2` 倍，再应用 `--global-gap-multiplier`
 - 单行建议量在同一 `(SKC, SKUID)` 内按状态、下单时间、源行号顺序分配
-- 30% 内的小变动会保留原订单行数量
+- 30% 内的小变动会尽量保留原订单行数量；允许超过计算缺口，但不会突破 `sku_order_max_qty` 单订单 SKU 上限
 - 订单级 `--min-order-ship-qty` 阈值会拦截低于起发量的订单，符合零 7 日销量豁免规则的订单除外
 
 ## Windows 打包 EXE

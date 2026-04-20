@@ -23,10 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from shipment_planner.engine import (
-    DEFAULT_TREND_RECENT_DAYS,
-    DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY,
-)
+from shipment_planner.engine import DEFAULT_ZERO_SOLD7_WITH_SOLD30_STOCKOUT_MAX_QTY
 
 from planner_ui.workflow import (
     PlannerRunResult,
@@ -48,7 +45,6 @@ class RunRequest:
     global_gap_multiplier: float
     zero_sold7_with_sold30_stockout_max_qty: int
     temu_sales_path: Path | None
-    trend_recent_days: int
 
 
 class PlannerRunWorker(QObject):
@@ -66,7 +62,6 @@ class PlannerRunWorker(QObject):
         global_gap_multiplier: float,
         zero_sold7_with_sold30_stockout_max_qty: int,
         temu_sales_path: Path | None,
-        trend_recent_days: int,
     ) -> None:
         super().__init__()
         self._orders_path = orders_path
@@ -79,7 +74,6 @@ class PlannerRunWorker(QObject):
             zero_sold7_with_sold30_stockout_max_qty
         )
         self._temu_sales_path = temu_sales_path
-        self._trend_recent_days = trend_recent_days
 
     @pyqtSlot()
     def run(self) -> None:
@@ -95,7 +89,6 @@ class PlannerRunWorker(QObject):
                     self._zero_sold7_with_sold30_stockout_max_qty
                 ),
                 temu_sales_path=self._temu_sales_path,
-                trend_recent_days=self._trend_recent_days,
             )
         except Exception as exc:  # pragma: no cover - UI error channel
             self.failed.emit(str(exc))
@@ -164,7 +157,7 @@ class PlannerWindow(QMainWindow):
 
         self.temu_path_edit = QLineEdit()
         self.temu_path_edit.setReadOnly(True)
-        self.temu_path_edit.setPlaceholderText(".xlsx Temu销售明细（可选，用于趋势调整）")
+        self.temu_path_edit.setPlaceholderText(".xlsx Temu销售明细（可选，供后续日销量预测使用）")
         self.temu_browse_button = QPushButton("Temu明细")
         self.temu_browse_button.clicked.connect(self._on_pick_temu_sales)
         self.temu_browse_button.setMinimumWidth(92)
@@ -247,16 +240,6 @@ class PlannerWindow(QMainWindow):
         )
         self.zero_sold7_stockout_cap_spin.setFixedWidth(108)
 
-        self.trend_recent_days_spin = QSpinBox()
-        self.trend_recent_days_spin.setRange(1, 6)
-        self.trend_recent_days_spin.setSingleStep(1)
-        self.trend_recent_days_spin.setValue(DEFAULT_TREND_RECENT_DAYS)
-        self.trend_recent_days_spin.setFixedWidth(108)
-        self.trend_recent_days_spin.setToolTip(
-            "Temu明细文件中用于趋势判断的最近天数（需选择Temu明细文件后生效）"
-        )
-        self.trend_recent_days_spin.setEnabled(False)
-
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
@@ -283,10 +266,6 @@ class PlannerWindow(QMainWindow):
         params_grid.addWidget(self.global_gap_multiplier_spin, 1, 1)
         params_grid.addWidget(QLabel("保底"), 1, 3)
         params_grid.addWidget(self.zero_sold7_stockout_cap_spin, 1, 4)
-
-        self.trend_recent_days_label = QLabel("趋势天数")
-        params_grid.addWidget(self.trend_recent_days_label, 2, 0)
-        params_grid.addWidget(self.trend_recent_days_spin, 2, 1)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -393,14 +372,12 @@ class PlannerWindow(QMainWindow):
         self._remember_dialog_dir(Path(selected_path))
         self._append_log(f"已选择 Temu 明细文件：{selected_path}")
         self.temu_clear_button.setEnabled(True)
-        self.trend_recent_days_spin.setEnabled(True)
 
     @pyqtSlot()
     def _on_clear_temu_sales(self) -> None:
         self.temu_path_edit.clear()
         self.temu_path_edit.setToolTip("")
         self.temu_clear_button.setEnabled(False)
-        self.trend_recent_days_spin.setEnabled(False)
         self._append_log("已清除 Temu 明细文件。")
 
     @pyqtSlot()
@@ -550,7 +527,6 @@ class PlannerWindow(QMainWindow):
         ):
             control.setEnabled(not running)
         self.temu_clear_button.setEnabled(not running and temu_selected)
-        self.trend_recent_days_spin.setEnabled(not running and temu_selected)
 
         if running:
             self.copy_skc_button.setEnabled(False)
@@ -617,7 +593,6 @@ class PlannerWindow(QMainWindow):
                 self.zero_sold7_stockout_cap_spin.value()
             ),
             temu_sales_path=Path(temu_text) if temu_text else None,
-            trend_recent_days=int(self.trend_recent_days_spin.value()),
         )
 
         validation_error = self._validate_run_inputs(
@@ -655,7 +630,6 @@ class PlannerWindow(QMainWindow):
                 run_request.zero_sold7_with_sold30_stockout_max_qty
             ),
             temu_sales_path=run_request.temu_sales_path,
-            trend_recent_days=run_request.trend_recent_days,
         )
         self._run_worker.moveToThread(self._run_thread)
 
