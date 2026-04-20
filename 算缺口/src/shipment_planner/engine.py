@@ -28,6 +28,15 @@ FORECAST_STRATEGY_NORMAL = "正常"
 FORECAST_STRATEGY_AGGRESSIVE = "激进"
 FORECAST_STRATEGY_SLOW_MOVER = "慢销"
 
+# Forecast tuning — EWMA half-lives replace fixed recent-N windows so the
+# trend signal degrades gracefully on short histories and avoids hard cutoffs.
+EWMA_SHORT_HALF_LIFE = 2.0
+EWMA_LONG_HALF_LIFE = 5.0
+STRATEGY_DROP_RATIO = 0.6
+STRATEGY_RISE_RATIO = 1.5
+STRATEGY_VOLATILITY_THRESHOLD = 1.2
+ISOLATED_SPIKE_MULTIPLIER = 3.0
+
 
 def build_recommendations(
     order_lines: list[OrderLine],
@@ -543,11 +552,11 @@ def _forecast_metrics(
     values = [max(0, int(value)) for value in daily_sales]
     mean_daily = statistics.fmean(values) if values else 0.0
     median_daily = float(statistics.median(values)) if values else 0.0
-    recent_7_avg = _average_recent(values, 7)
-    recent_3_avg = _average_recent(values, 3)
+    ewma_short = _ewma(values, EWMA_SHORT_HALF_LIFE)
+    ewma_long = _ewma(values, EWMA_LONG_HALF_LIFE)
     trimmed_mean = _trimmed_mean(values)
     volatility = _volatility(values, mean_daily)
-    isolated_spike = _has_isolated_recent_spike(values, median_daily, recent_7_avg)
+    isolated_spike = _has_isolated_recent_spike(values, median_daily, ewma_long)
 
     if _is_slow_mover(mean_daily=mean_daily, median_daily=median_daily):
         strategy = FORECAST_STRATEGY_SLOW_MOVER
@@ -555,8 +564,8 @@ def _forecast_metrics(
     else:
         strategy = _forecast_strategy(
             median_daily=median_daily,
-            recent_7_avg=recent_7_avg,
-            recent_3_avg=recent_3_avg,
+            ewma_short=ewma_short,
+            ewma_long=ewma_long,
             volatility=volatility,
             isolated_spike=isolated_spike,
             is_hot_style=is_hot_style,
@@ -564,8 +573,8 @@ def _forecast_metrics(
         forecast_daily_sales = _forecast_daily_sales(
             strategy=strategy,
             median_daily=median_daily,
-            recent_7_avg=recent_7_avg,
-            recent_3_avg=recent_3_avg,
+            ewma_short=ewma_short,
+            ewma_long=ewma_long,
             trimmed_mean=trimmed_mean,
         )
     forecast_stocking_period_sales = forecast_daily_sales * max(0.0, stocking_days)
@@ -586,9 +595,22 @@ def _is_slow_mover(*, mean_daily: float, median_daily: float) -> bool:
     return median_daily == 0.0 and mean_daily > 0.0
 
 
-def _average_recent(values: list[int], days: int) -> float:
-    window = values[-days:]
-    return statistics.fmean(window) if window else 0.0
+def _ewma(values: list[int], half_life: float) -> float:
+    """Exponentially weighted moving average with a half-life decay.
+
+    Half-life H means a sample H days old contributes half as much as the
+    most recent one, with no hard cutoff — so short histories degrade
+    gracefully and single-day noise is smoothed.
+    """
+    if not values:
+        return 0.0
+    if half_life <= 0:
+        return float(values[-1])
+    alpha = 1.0 - 0.5 ** (1.0 / half_life)
+    result = float(values[0])
+    for value in values[1:]:
+        result = alpha * value + (1.0 - alpha) * result
+    return result
 
 
 def _trimmed_mean(values: list[int]) -> float:
@@ -607,14 +629,14 @@ def _volatility(values: list[int], mean_daily: float) -> float:
 def _has_isolated_recent_spike(
     values: list[int],
     median_daily: float,
-    recent_7_avg: float,
+    ewma_long: float,
 ) -> bool:
     if len(values) < 3:
         return False
     recent = values[-3:]
     recent_max = max(recent)
-    baseline = max(1.0, median_daily, recent_7_avg)
-    if recent_max < baseline * 3:
+    baseline = max(1.0, median_daily, ewma_long)
+    if recent_max < baseline * ISOLATED_SPIKE_MULTIPLIER:
         return False
     remaining = list(recent)
     remaining.remove(recent_max)
@@ -624,20 +646,27 @@ def _has_isolated_recent_spike(
 def _forecast_strategy(
     *,
     median_daily: float,
-    recent_7_avg: float,
-    recent_3_avg: float,
+    ewma_short: float,
+    ewma_long: float,
     volatility: float,
     isolated_spike: bool,
     is_hot_style: bool,
 ) -> str:
     baseline = max(1.0, median_daily)
-    if recent_3_avg < baseline * 0.6:
+    # Double confirmation: fast signal supplies magnitude, slow signal confirms direction.
+    trending_down = (
+        ewma_short < baseline * STRATEGY_DROP_RATIO and ewma_long <= baseline
+    )
+    trending_up = (
+        ewma_short > baseline * STRATEGY_RISE_RATIO and ewma_long >= baseline
+    )
+    if trending_down:
         return FORECAST_STRATEGY_CONSERVATIVE
-    if volatility > 1.2 or isolated_spike:
+    if volatility > STRATEGY_VOLATILITY_THRESHOLD or isolated_spike:
         return FORECAST_STRATEGY_CONSERVATIVE
-    if recent_3_avg > baseline * 1.5:
+    if trending_up:
         return FORECAST_STRATEGY_AGGRESSIVE
-    if is_hot_style and recent_7_avg >= baseline:
+    if is_hot_style and ewma_long >= baseline:
         return FORECAST_STRATEGY_AGGRESSIVE
     return FORECAST_STRATEGY_NORMAL
 
@@ -646,14 +675,15 @@ def _forecast_daily_sales(
     *,
     strategy: str,
     median_daily: float,
-    recent_7_avg: float,
-    recent_3_avg: float,
+    ewma_short: float,
+    ewma_long: float,
     trimmed_mean: float,
 ) -> float:
     if strategy == FORECAST_STRATEGY_CONSERVATIVE:
-        return min(median_daily, recent_7_avg, trimmed_mean)
+        return min(median_daily, ewma_long, trimmed_mean)
     if strategy == FORECAST_STRATEGY_AGGRESSIVE:
-        forecast = (recent_7_avg * 0.7) + (recent_3_avg * 0.3)
-        cap = max(median_daily * 2.0, recent_7_avg * 1.2)
+        # Aggressive follows the fast signal; the slow one tempers single-day overreactions.
+        forecast = (ewma_short * 0.7) + (ewma_long * 0.3)
+        cap = max(median_daily * 2.0, ewma_short * 1.2)
         return min(forecast, cap)
-    return (median_daily * 0.5) + (recent_7_avg * 0.5)
+    return (median_daily * 0.5) + (ewma_long * 0.5)

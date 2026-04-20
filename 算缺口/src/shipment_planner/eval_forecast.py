@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .engine import compute_forecast_metrics
+from .models import SalesRecord
 from .parsers import (
     SALES_REQUIRED_COLUMNS,
     TEMU_DAILY_REQUIRED_COLUMNS,
@@ -34,6 +35,9 @@ from .parsers import (
     parse_temu_daily_sales,
 )
 from .xlsx_reader import read_xlsx_table
+
+DEFAULT_HOLDOUT_DAYS = 7
+DEFAULT_MIN_TRAIN_DAYS = 14
 
 
 @dataclass(frozen=True)
@@ -93,11 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     assert_required_columns(temu_header, TEMU_DAILY_REQUIRED_COLUMNS, "Temu daily sales file")
     daily_sales_by_key = parse_temu_daily_sales(temu_rows)
 
-    sales_by_key = {(record.skc, record.skuid): record for record in sales_records}
-
-    rows, skipped = _evaluate(
+    rows, skipped, summary = run_holdout_eval(
+        sales_records=sales_records,
         daily_sales_by_key=daily_sales_by_key,
-        sales_by_key=sales_by_key,
         holdout_days=args.holdout_days,
         min_train_days=args.min_train_days,
         apply_stockout_mask=not args.no_stockout_mask,
@@ -109,11 +111,6 @@ def main(argv: list[str] | None = None) -> int:
     summary_path = out_dir / "forecast_eval_summary.json"
 
     _write_detail_csv(detail_path, rows)
-    summary = _build_summary(
-        rows,
-        holdout_days=args.holdout_days,
-        skipped_insufficient_history=skipped,
-    )
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"Evaluated SKUs: {summary['evaluated_skus']}")
@@ -130,10 +127,41 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def run_holdout_eval(
+    *,
+    sales_records: Sequence[SalesRecord],
+    daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
+    holdout_days: int = DEFAULT_HOLDOUT_DAYS,
+    min_train_days: int = DEFAULT_MIN_TRAIN_DAYS,
+    apply_stockout_mask: bool = True,
+) -> tuple[list[EvalRow], int, dict[str, object]]:
+    """Evaluate forecast accuracy on a trailing holdout window.
+
+    Returns (per-SKU rows, skipped-due-to-insufficient-history, summary dict).
+    Reusable from the main CLI so recommendations can cite per-SKU error.
+    """
+    sales_by_key: dict[tuple[str, str], SalesRecord] = {
+        (record.skc, record.skuid): record for record in sales_records
+    }
+    rows, skipped = _evaluate(
+        daily_sales_by_key=daily_sales_by_key,
+        sales_by_key=sales_by_key,
+        holdout_days=holdout_days,
+        min_train_days=min_train_days,
+        apply_stockout_mask=apply_stockout_mask,
+    )
+    summary = _build_summary(
+        rows,
+        holdout_days=holdout_days,
+        skipped_insufficient_history=skipped,
+    )
+    return rows, skipped, summary
+
+
 def _evaluate(
     *,
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
-    sales_by_key: dict[tuple[str, str], object],
+    sales_by_key: dict[tuple[str, str], SalesRecord],
     holdout_days: int,
     min_train_days: int,
     apply_stockout_mask: bool,

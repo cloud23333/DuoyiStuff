@@ -33,7 +33,7 @@
 - Use `python3 -m pytest` for the committed automated test suite.
 - Use repeatable CLI smoke tests when a change affects file detection, report exports, or end-to-end workflows.
 - For each logic change, verify:
-  - `data/output/发货建议明细.csv`
+  - `data/output/发货建议明细.xlsx`
   - `data/output/数据质量报告.csv`
   - `data/output/运行摘要.json`
 - Add tests under `tests/` with `test_*.py` naming, prioritizing parser normalization and engine allocation edge cases.

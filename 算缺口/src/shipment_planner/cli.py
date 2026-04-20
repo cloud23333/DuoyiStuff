@@ -6,6 +6,11 @@ from typing import TypeAlias
 
 from .constraints import DEFAULT_CONSTRAINTS_FILENAME, load_constraints
 from .engine import build_recommendations
+from .eval_forecast import (
+    DEFAULT_HOLDOUT_DAYS,
+    DEFAULT_MIN_TRAIN_DAYS,
+    run_holdout_eval,
+)
 from .parsers import (
     ORDER_REQUIRED_COLUMNS,
     SALES_REQUIRED_COLUMNS,
@@ -62,6 +67,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Global multiplier applied to key gaps after hot-style rule (default: 1.0)",
+    )
+    parser.add_argument(
+        "--eval-holdout-days",
+        type=int,
+        default=DEFAULT_HOLDOUT_DAYS,
+        help=(
+            "Trailing days held out for forecast-quality eval appended to the "
+            f"summary and detail rows (default: {DEFAULT_HOLDOUT_DAYS})."
+        ),
+    )
+    parser.add_argument(
+        "--eval-min-train-days",
+        type=int,
+        default=DEFAULT_MIN_TRAIN_DAYS,
+        help=(
+            "Skip forecast eval for SKUs with fewer training days than this "
+            f"(default: {DEFAULT_MIN_TRAIN_DAYS})."
+        ),
     )
     return parser
 
@@ -150,12 +173,20 @@ def main(argv: list[str] | None = None) -> int:
         global_gap_multiplier=global_gap_multiplier,
         daily_sales_by_key=daily_sales_by_key,
     )
+    eval_rows, _eval_skipped, eval_summary = run_holdout_eval(
+        sales_records=sales_records,
+        daily_sales_by_key=daily_sales_by_key,
+        holdout_days=args.eval_holdout_days,
+        min_train_days=args.eval_min_train_days,
+    )
     outputs = export_reports(
         args.out_dir,
         recommendations,
         quality_rows,
         summary,
         daily_sales_by_key=daily_sales_by_key,
+        eval_rows=eval_rows,
+        eval_summary=eval_summary,
     )
 
     _print_run_summary(

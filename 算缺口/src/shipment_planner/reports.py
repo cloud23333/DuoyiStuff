@@ -11,6 +11,7 @@ from openpyxl.drawing.image import Image as XlsxImage
 from openpyxl.utils import get_column_letter
 
 from .engine import stockout_mask_cut
+from .eval_forecast import EvalRow
 from .forecast_curve import build_forecast_curve
 from .plots import render_sku_plot
 
@@ -26,6 +27,8 @@ RECOMMENDATION_FIELDS = [
     ("forecast_strategy", "预测策略"),
     ("forecast_daily_sales", "预测日均销量"),
     ("forecast_stocking_period_sales", "预测备货期销量"),
+    ("sku_forecast_abs_error", "SKU预测绝对误差"),
+    ("sku_forecast_signed_error", "SKU预测偏差"),
     ("__plot__", "销量与预测曲线"),
     ("stocking_days", "备货逻辑天数"),
     ("wh", "平台仓内库存"),
@@ -105,6 +108,8 @@ INT_FORMAT_FIELDS = {
     "min_order_ship_qty_threshold",
 }
 
+FORECAST_ERROR_FIELDS = {"sku_forecast_abs_error", "sku_forecast_signed_error"}
+
 SUMMARY_INT_FORMAT_FIELDS = {
     "order_lines",
     "sales_rows",
@@ -172,6 +177,28 @@ SUMMARY_FIELDS = [
     ("intercepted_orders", "拦截导致不发订单数"),
 ]
 
+FORECAST_EVAL_SUMMARY_KEY = "预测回测评估"
+FORECAST_EVAL_SUMMARY_FIELDS = [
+    ("evaluated_skus", "评估SKU数"),
+    ("skipped_insufficient_history", "历史不足跳过SKU数"),
+    ("holdout_days", "留出天数"),
+    ("mae", "MAE"),
+    ("wape", "WAPE"),
+    ("bias", "平均偏差"),
+]
+FORECAST_EVAL_STRATEGY_FIELDS = [
+    ("count", "SKU数"),
+    ("mae", "MAE"),
+    ("wape", "WAPE"),
+    ("bias", "平均偏差"),
+]
+FORECAST_EVAL_INT_FIELDS = {
+    "evaluated_skus",
+    "skipped_insufficient_history",
+    "holdout_days",
+    "count",
+}
+
 
 def export_reports(
     out_dir: str | Path,
@@ -179,6 +206,8 @@ def export_reports(
     quality_rows: list[dict[str, object]],
     summary: dict[str, object],
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
+    eval_rows: Sequence[EvalRow] | None = None,
+    eval_summary: dict[str, object] | None = None,
 ) -> dict[str, Path]:
     output_dir = Path(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -186,13 +215,15 @@ def export_reports(
     recommendation_path = output_dir / "发货建议明细.xlsx"
     quality_path = output_dir / "数据质量报告.csv"
     summary_path = output_dir / "运行摘要.json"
+    _remove_stale_recommendation_csv(output_dir / "发货建议明细.csv")
 
     quality_columns = [target for _, target in QUALITY_FIELDS]
 
+    _annotate_forecast_error(recommendations, eval_rows or ())
     plot_cache = _build_plot_cache(recommendations, daily_sales_by_key)
     localized_recommendations = [_localize_recommendation_row(row) for row in recommendations]
     localized_quality_rows = [_localize_quality_row(row) for row in quality_rows]
-    localized_summary = _localize_summary(summary)
+    localized_summary = _localize_summary(summary, eval_summary=eval_summary)
 
     _write_recommendations_xlsx(
         path=recommendation_path,
@@ -212,14 +243,41 @@ def export_reports(
     }
 
 
+def _remove_stale_recommendation_csv(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _annotate_forecast_error(
+    recommendations: list[dict[str, object]],
+    eval_rows: Sequence[EvalRow],
+) -> None:
+    error_by_key: dict[tuple[str, str], EvalRow] = {
+        (row.skc, row.skuid): row for row in eval_rows
+    }
+    for row in recommendations:
+        key = (str(row.get("店铺款式编码", "")), str(row.get("店铺商品编码", "")))
+        eval_row = error_by_key.get(key)
+        if eval_row is None:
+            row["sku_forecast_abs_error"] = ""
+            row["sku_forecast_signed_error"] = ""
+            continue
+        row["sku_forecast_abs_error"] = eval_row.abs_error
+        row["sku_forecast_signed_error"] = eval_row.signed_error
+
+
 def _build_plot_cache(
     recommendations: list[dict[str, object]],
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
 ) -> dict[tuple[str, str], bytes]:
+    """Render one plot for every unique SKU in the recommendation rows."""
     cache: dict[tuple[str, str], bytes] = {}
+    plot_keys = _plot_keys(recommendations)
     for row in recommendations:
         key = (str(row.get("店铺款式编码", "")), str(row.get("店铺商品编码", "")))
-        if key in cache:
+        if key in cache or key not in plot_keys:
             continue
         history = daily_sales_by_key.get(key, ())
         forecast = build_forecast_curve(
@@ -241,6 +299,16 @@ def _build_plot_cache(
             masked_tail_from=masked_tail_from,
         )
     return cache
+
+
+def _plot_keys(
+    recommendations: list[dict[str, object]],
+) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for row in recommendations:
+        key = (str(row.get("店铺款式编码", "")), str(row.get("店铺商品编码", "")))
+        keys.add(key)
+    return keys
 
 
 def _as_float(value: object) -> float:
@@ -337,7 +405,11 @@ def _localize_row(
     return localized
 
 
-def _localize_summary(summary: dict[str, object]) -> dict[str, object]:
+def _localize_summary(
+    summary: dict[str, object],
+    *,
+    eval_summary: dict[str, object] | None = None,
+) -> dict[str, object]:
     localized: dict[str, object] = {}
     for source, target in SUMMARY_FIELDS:
         value = summary.get(source, 0)
@@ -345,7 +417,39 @@ def _localize_summary(summary: dict[str, object]) -> dict[str, object]:
             localized[target] = _format_int_like(value)
             continue
         localized[target] = value
+    if eval_summary is not None:
+        localized[FORECAST_EVAL_SUMMARY_KEY] = _localize_eval_summary(eval_summary)
     return localized
+
+
+def _localize_eval_summary(eval_summary: dict[str, object]) -> dict[str, object]:
+    localized: dict[str, object] = {}
+    for source, target in FORECAST_EVAL_SUMMARY_FIELDS:
+        localized[target] = _localize_eval_summary_value(source, eval_summary.get(source))
+
+    by_strategy = eval_summary.get("by_strategy", {})
+    if isinstance(by_strategy, dict):
+        localized["按策略"] = {
+            str(strategy): _localize_eval_strategy_summary(stats)
+            for strategy, stats in by_strategy.items()
+            if isinstance(stats, dict)
+        }
+    else:
+        localized["按策略"] = {}
+    return localized
+
+
+def _localize_eval_strategy_summary(stats: dict[object, object]) -> dict[str, object]:
+    localized: dict[str, object] = {}
+    for source, target in FORECAST_EVAL_STRATEGY_FIELDS:
+        localized[target] = _localize_eval_summary_value(source, stats.get(source))
+    return localized
+
+
+def _localize_eval_summary_value(source: str, value: object) -> object:
+    if source in FORECAST_EVAL_INT_FIELDS:
+        return _format_int_like(value)
+    return value
 
 
 def _format_int_like(value: object) -> object:
