@@ -309,6 +309,7 @@ def _print_run_summary(
         f"{summary['matched_order_lines']}/{summary['order_lines']} "
         f"({summary['join_coverage_pct']}%)"
     )
+    print(f"Quality issue rows: {summary['quality_issue_rows']}")
     print(f"Recommended qty: {summary['total_recommended_qty']}")
     print(f"30%-change keep lines: {summary['small_change_kept_lines']}")
     print(f"Global gap multiplier: {summary['global_gap_multiplier']}")

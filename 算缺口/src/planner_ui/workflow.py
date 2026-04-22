@@ -206,6 +206,7 @@ def _build_localized_console_output(
     sales_rows = summary_value("销售行数")
     matched_lines = summary_value("匹配订单行数")
     join_coverage_pct = summary_value("匹配覆盖率_百分比")
+    quality_issue_rows = summary_value("质量问题行数")
     total_recommended = summary_value("建议发货总量")
     small_change_kept_lines = summary_value("触发30%免改行数")
     global_gap_multiplier = summary_value("全局缺口上浮系数")
@@ -226,6 +227,7 @@ def _build_localized_console_output(
         f"订单行数：{order_lines}",
         f"销售行数：{sales_rows}",
         f"匹配覆盖率：{matched_lines}/{order_lines} ({join_coverage_pct}%)",
+        f"质量问题行数：{quality_issue_rows}",
         f"建议发货数量：{total_recommended}",
         f"30%变动保留行数：{small_change_kept_lines}",
         f"全局缺口倍率：{global_gap_multiplier}",

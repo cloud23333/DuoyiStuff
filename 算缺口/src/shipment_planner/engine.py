@@ -58,12 +58,13 @@ def build_recommendations(
     normalized_exclude_skuid = _normalize_excluded_codes(exclude_skuid)
     sales_by_key, duplicate_keys = _build_sales_lookup(sales_records)
     key_demand = _build_key_demand(ordered_lines)
-    _validate_daily_sales_for_demand(key_demand, daily_sales_by_key)
+    missing_daily_sales_keys = _missing_daily_sales_keys(key_demand, daily_sales_by_key)
     shipping_in_progress_lookup = shipping_in_progress_by_key or {}
     key_states = _build_key_states(
         key_demand=key_demand,
         sales_by_key=sales_by_key,
         daily_sales_by_key=daily_sales_by_key or {},
+        missing_daily_sales_keys=missing_daily_sales_keys,
         shipping_in_progress_by_key=shipping_in_progress_lookup,
         global_gap_multiplier=global_gap_multiplier,
     )
@@ -119,6 +120,15 @@ def build_recommendations(
         sku_code_check, quality_issue_row = _evaluate_sku_code(line, sales)
         if quality_issue_row is not None:
             quality_rows.append(quality_issue_row)
+        if sales is not None and key in missing_daily_sales_keys:
+            quality_rows.append(
+                _quality_issue_row(
+                    line,
+                    issue_type="missing_daily_sales",
+                    system_sku=system_sku,
+                    message="Missing daily sales data for (SKC, SKUID)",
+                )
+            )
 
         (
             stocking_days,
@@ -231,18 +241,19 @@ def _normalize_excluded_codes(codes: set[str] | None) -> set[str]:
     return {code.strip() for code in (codes or set()) if code.strip()}
 
 
-def _validate_daily_sales_for_demand(
+def _missing_daily_sales_keys(
     key_demand: dict[tuple[str, str], int],
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None,
-) -> None:
+) -> set[tuple[str, str]]:
     if daily_sales_by_key is None:
         raise ValueError("daily sales data is required.")
 
+    missing_keys: set[tuple[str, str]] = set()
     for skc, skuid in key_demand:
-        if (skc, skuid) not in daily_sales_by_key:
-            raise ValueError(f"Missing daily sales data for (SKC, SKUID): {skc}, {skuid}")
-        if not daily_sales_by_key[(skc, skuid)]:
-            raise ValueError(f"Empty daily sales sequence for (SKC, SKUID): {skc}, {skuid}")
+        key = (skc, skuid)
+        if not daily_sales_by_key.get(key):
+            missing_keys.add(key)
+    return missing_keys
 
 
 def _build_intercept_reason_by_row(
@@ -418,6 +429,7 @@ def _build_key_states(
     key_demand: dict[tuple[str, str], int],
     sales_by_key: dict[tuple[str, str], SalesRecord],
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
+    missing_daily_sales_keys: set[tuple[str, str]],
     shipping_in_progress_by_key: dict[tuple[str, str], int],
     global_gap_multiplier: float,
 ) -> dict[tuple[str, str], KeyState]:
@@ -430,6 +442,19 @@ def _build_key_states(
                 skc=skc,
                 skuid=skuid,
                 system_sku="",
+                order_qty_total=order_qty_total,
+                gap=0,
+                recommended_qty_total=0,
+                forecast_metrics=ForecastMetrics("", 0.0, 0.0),
+                min_order_ship_qty_exempt_eligible=False,
+            )
+            continue
+
+        if key in missing_daily_sales_keys:
+            states[key] = KeyState(
+                skc=skc,
+                skuid=skuid,
+                system_sku=sales.system_sku,
                 order_qty_total=order_qty_total,
                 gap=0,
                 recommended_qty_total=0,

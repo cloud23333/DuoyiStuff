@@ -13,7 +13,6 @@ from openpyxl.utils import get_column_letter
 from .engine import stockout_mask_cut
 from .eval_forecast import EvalRow
 from .forecast_curve import build_forecast_curve
-from .plots import render_sku_plot
 
 RECOMMENDATION_FIELDS = [
     ("internal_order_id", "内部订单号"),
@@ -90,11 +89,13 @@ SKU_CHECK_MAP = {
 QUALITY_TYPE_MAP = {
     "sku_code_diff": "SKU编码不一致",
     "missing_sales_key": "缺少销售匹配",
+    "missing_daily_sales": "缺少每日销量数据",
 }
 
 QUALITY_MESSAGE_MAP = {
     "Order SKU and system SKU differ after normalization": "原始商品编码与系统商品编码在标准化后仍不一致",
     "No sales row found for (SKC, SKUID)": "未找到对应销售键 (SKC, SKUID)",
+    "Missing daily sales data for (SKC, SKUID)": "未找到对应每日销量数据 (SKC, SKUID)",
 }
 
 INT_FORMAT_FIELDS = {
@@ -273,6 +274,8 @@ def _build_plot_cache(
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
 ) -> dict[tuple[str, str], bytes]:
     """Render one plot for every unique SKU in the recommendation rows."""
+    from .plots import render_sku_plot
+
     cache: dict[tuple[str, str], bytes] = {}
     plot_keys = _plot_keys(recommendations)
     for row in recommendations:
