@@ -206,7 +206,6 @@ def _evaluate(
         test = daily[-holdout_days:]
 
         sales = sales_by_key.get(key)
-        stocking_days = getattr(sales, "stocking_days", 0.0) if sales is not None else 0.0
         is_hot_style = getattr(sales, "is_hot_style", False) if sales is not None else False
         stock_in_warehouse = (
             getattr(sales, "stock_in_warehouse", 0.0) if sales is not None else 0.0
@@ -214,7 +213,7 @@ def _evaluate(
 
         metrics = compute_forecast_metrics(
             daily_sales=train,
-            stocking_days=stocking_days,
+            stocking_days=holdout_days,
             is_hot_style=is_hot_style,
             stock_in_warehouse=stock_in_warehouse,
             apply_stockout_mask=apply_stockout_mask,

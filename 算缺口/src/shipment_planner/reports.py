@@ -27,6 +27,7 @@ RECOMMENDATION_FIELDS = [
     ("demand_profile", "需求类型"),
     ("anomaly_flags", "异常标记"),
     ("service_level", "服务水平"),
+    ("forecast_model", "预测模型"),
     ("effective_daily_sales", "异常调整后日均销量"),
     ("forecast_daily_sales", "预测日均销量"),
     ("forecast_stocking_period_sales", "预测备货期销量"),

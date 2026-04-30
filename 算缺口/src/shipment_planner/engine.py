@@ -6,6 +6,12 @@ from collections import defaultdict
 from collections.abc import Sequence
 
 from .allocation import allocate_recommendation_quantities
+from .forecast_models import (
+    MODEL_CURRENT,
+    MODEL_IMAPA,
+    MODEL_TSB,
+    forecast_candidate_model,
+)
 from .models import ForecastMetrics, KeyState, OrderLine, SalesRecord
 from .parsers import normalize_sku_code
 from .post_processing import (
@@ -173,6 +179,7 @@ def build_recommendations(
                 "demand_profile": forecast_metrics.demand_profile,
                 "anomaly_flags": forecast_metrics.anomaly_flags,
                 "service_level": round_qty(forecast_metrics.service_level),
+                "forecast_model": forecast_metrics.forecast_model,
                 "effective_daily_sales": round_qty(
                     forecast_metrics.effective_daily_sales
                 ),
@@ -657,13 +664,25 @@ def _forecast_metrics(
         isolated_spike=isolated_spike,
         recent_drop=recent_drop,
     )
-    forecast_daily_sales = _service_level_daily_sales(
-        effective_daily_sales=effective_daily_sales,
-        values=cleaned_values,
-        service_level=service_level,
+    forecast_model = _select_forecast_model(
         demand_profile=demand_profile,
         recent_drop=recent_drop,
     )
+    if forecast_model == MODEL_CURRENT:
+        forecast_daily_sales = _service_level_daily_sales(
+            effective_daily_sales=effective_daily_sales,
+            values=cleaned_values,
+            service_level=service_level,
+            demand_profile=demand_profile,
+            recent_drop=recent_drop,
+        )
+    else:
+        forecast_daily_sales = forecast_candidate_model(
+            forecast_model,
+            cleaned_values,
+            horizon_days=max(1, math.ceil(stocking_days)),
+        )
+        effective_daily_sales = forecast_daily_sales
     forecast_stocking_period_sales = forecast_daily_sales * max(0.0, stocking_days)
     return ForecastMetrics(
         strategy=strategy,
@@ -672,6 +691,7 @@ def _forecast_metrics(
         demand_profile=demand_profile,
         anomaly_flags=anomaly_flags,
         service_level=service_level,
+        forecast_model=forecast_model,
         effective_daily_sales=effective_daily_sales,
     )
 
@@ -874,6 +894,18 @@ def _service_level(
     if is_hot_style or strategy == FORECAST_STRATEGY_AGGRESSIVE:
         return SERVICE_LEVEL_AGGRESSIVE
     return SERVICE_LEVEL_NORMAL
+
+
+def _select_forecast_model(
+    *,
+    demand_profile: str,
+    recent_drop: bool,
+) -> str:
+    if recent_drop or demand_profile == DEMAND_PROFILE_NO_SALES:
+        return MODEL_CURRENT
+    if demand_profile == DEMAND_PROFILE_INTERMITTENT:
+        return MODEL_IMAPA
+    return MODEL_TSB
 
 
 def _service_level_daily_sales(

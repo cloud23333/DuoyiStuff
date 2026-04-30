@@ -21,7 +21,7 @@ def test_isolated_spike_is_marked_and_downweighted():
     assert metrics.demand_profile == "波动款"
     assert "孤立爆单" in metrics.anomaly_flags
     assert metrics.service_level == pytest.approx(0.70)
-    assert metrics.effective_daily_sales < 8
+    assert metrics.effective_daily_sales < 10
     assert metrics.forecast_daily_sales < 10
 
 
@@ -49,6 +49,7 @@ def test_intermittent_sales_use_slow_mover_profile_without_collapsing():
 
     assert metrics.strategy == FORECAST_STRATEGY_SLOW_MOVER
     assert metrics.demand_profile == "慢销/间歇款"
+    assert metrics.forecast_model == "imapa"
     assert metrics.service_level == pytest.approx(0.65)
     assert metrics.effective_daily_sales > 0
     assert metrics.forecast_daily_sales > 0
@@ -91,8 +92,22 @@ def test_stable_hot_style_uses_aggressive_service_level():
     )
 
     assert metrics.demand_profile == "稳定款"
+    assert metrics.forecast_model == "tsb"
     assert metrics.service_level == pytest.approx(0.85)
     assert metrics.forecast_daily_sales >= metrics.effective_daily_sales
+
+
+def test_stable_non_hot_sales_use_tsb_model():
+    metrics = compute_forecast_metrics(
+        daily_sales=(8, 9, 8, 9, 8, 9, 8),
+        stocking_days=7,
+        is_hot_style=False,
+        stock_in_warehouse=20,
+    )
+
+    assert metrics.demand_profile == "稳定款"
+    assert metrics.forecast_model == "tsb"
+    assert metrics.forecast_daily_sales > 0
 
 
 def test_recommendation_report_includes_forecast_explanation_columns():
@@ -101,4 +116,5 @@ def test_recommendation_report_includes_forecast_explanation_columns():
     assert field_labels["demand_profile"] == "需求类型"
     assert field_labels["anomaly_flags"] == "异常标记"
     assert field_labels["service_level"] == "服务水平"
+    assert field_labels["forecast_model"] == "预测模型"
     assert field_labels["effective_daily_sales"] == "异常调整后日均销量"

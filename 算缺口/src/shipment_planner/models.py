@@ -38,6 +38,7 @@ class ForecastMetrics:
     demand_profile: str = ""
     anomaly_flags: str = "无"
     service_level: float = 0.0
+    forecast_model: str = "current"
     effective_daily_sales: float = 0.0
 
 
