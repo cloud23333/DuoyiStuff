@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
-from datetime import datetime
 import io
 import json
-from pathlib import Path
 import sys
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 from shipment_planner.cli import main as planner_cli_main
 from shipment_planner.constraints import DEFAULT_CONSTRAINTS_FILENAME
@@ -106,7 +106,7 @@ def run_planner(
     for file_path, _, _ in input_specs:
         header, _ = read_xlsx_table(file_path)
         headers.append(header)
-    for header, (_, required_columns, label) in zip(headers, input_specs):
+    for header, (_, required_columns, label) in zip(headers, input_specs, strict=True):
         if label == "Temu每日销量文件":
             _assert_temu_daily_columns(header)
             continue
@@ -209,6 +209,10 @@ def _build_localized_console_output(
     quality_issue_rows = summary_value("质量问题行数")
     total_recommended = summary_value("建议发货总量")
     small_change_kept_lines = summary_value("触发30%免改行数")
+    demand_profile_summary = summary_value("需求类型分布")
+    anomaly_flag_summary = summary_value("异常标记分布")
+    service_level_summary = summary_value("服务水平分布")
+    forecast_model_summary = summary_value("预测模型分布")
     global_gap_multiplier = summary_value("全局缺口上浮系数")
     min_order_ship_qty = summary_value("最小发货阈值")
     low_qty_orders_before_exempt = summary_value("阈值前低发货量订单数")
@@ -230,6 +234,10 @@ def _build_localized_console_output(
         f"质量问题行数：{quality_issue_rows}",
         f"建议发货数量：{total_recommended}",
         f"30%变动保留行数：{small_change_kept_lines}",
+        f"需求类型分布：{demand_profile_summary}",
+        f"异常标记分布：{anomaly_flag_summary}",
+        f"服务水平分布：{service_level_summary}",
+        f"预测模型分布：{forecast_model_summary}",
         f"全局缺口倍率：{global_gap_multiplier}",
         f"最小发货阈值：{min_order_ship_qty}",
         f"阈值前低发货量订单数：{low_qty_orders_before_exempt}",

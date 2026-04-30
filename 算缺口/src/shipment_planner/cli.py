@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import re
 from datetime import datetime
 from pathlib import Path
-import re
 from typing import TypeAlias
 
 from .constraints import DEFAULT_CONSTRAINTS_FILENAME, load_constraints
@@ -312,6 +312,10 @@ def _print_run_summary(
     print(f"Quality issue rows: {summary['quality_issue_rows']}")
     print(f"Recommended qty: {summary['total_recommended_qty']}")
     print(f"30%-change keep lines: {summary['small_change_kept_lines']}")
+    print(f"Demand profiles: {summary['demand_profile_summary']}")
+    print(f"Anomaly flags: {summary['anomaly_flag_summary']}")
+    print(f"Service levels: {summary['service_level_summary']}")
+    print(f"Forecast models: {summary['forecast_model_summary']}")
     print(f"Global gap multiplier: {summary['global_gap_multiplier']}")
     print(f"Min order ship qty threshold: {summary['min_order_ship_qty_threshold']}")
     print(f"Low-qty orders before exemption: {summary['low_qty_orders_before_exempt']}")
