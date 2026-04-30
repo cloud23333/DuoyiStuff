@@ -25,9 +25,20 @@ def test_isolated_spike_is_marked_and_downweighted():
     assert metrics.forecast_daily_sales < 10
 
 
+def test_small_intermittent_sales_are_not_marked_as_isolated_spike():
+    metrics = compute_forecast_metrics(
+        daily_sales=(0, 2, 0, 8, 0, 2, 0),
+        stocking_days=7,
+        is_hot_style=False,
+        stock_in_warehouse=10,
+    )
+
+    assert "孤立爆单" not in metrics.anomaly_flags
+
+
 def test_recent_sales_drop_with_stock_is_conservative_but_not_zero():
     metrics = compute_forecast_metrics(
-        daily_sales=(10, 11, 10, 12, 10, 2, 1, 2),
+        daily_sales=(10, 11, 10, 12, 10, 2, 1, 2, 1, 2),
         stocking_days=7,
         is_hot_style=False,
         stock_in_warehouse=20,
@@ -39,9 +50,20 @@ def test_recent_sales_drop_with_stock_is_conservative_but_not_zero():
     assert 0 < metrics.forecast_daily_sales < 10
 
 
+def test_three_day_gap_does_not_trigger_recent_drop_when_five_day_window_is_healthy():
+    metrics = compute_forecast_metrics(
+        daily_sales=(10, 11, 10, 9, 10, 12, 12, 0, 0, 0),
+        stocking_days=7,
+        is_hot_style=False,
+        stock_in_warehouse=20,
+    )
+
+    assert "连续暴跌" not in metrics.anomaly_flags
+
+
 def test_recent_sales_collapse_to_zero_with_stock_forecasts_zero():
     metrics = compute_forecast_metrics(
-        daily_sales=(10, 11, 10, 12, 10, 0, 0, 0),
+        daily_sales=(10, 11, 10, 12, 10, 9, 0, 0, 0, 0, 0),
         stocking_days=7,
         is_hot_style=False,
         stock_in_warehouse=20,

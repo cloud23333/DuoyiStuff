@@ -55,11 +55,13 @@ STRATEGY_DROP_RATIO = 0.6
 STRATEGY_RISE_RATIO = 1.5
 STRATEGY_VOLATILITY_THRESHOLD = 1.2
 ISOLATED_SPIKE_MULTIPLIER = 3.0
+ISOLATED_SPIKE_MIN_QTY = 10.0
+ISOLATED_SPIKE_CONTEXT_DAYS = 5
 SINGLE_DAY_BIG_ORDER_MIN_QTY = 10.0
 SINGLE_DAY_BIG_ORDER_SHARE = 0.70
 SINGLE_DAY_BIG_ORDER_PEER_MULTIPLIER = 5.0
 SINGLE_DAY_BIG_ORDER_MIN_SMALL_SALE_DAYS = 2
-RECENT_DROP_DAYS = 3
+RECENT_DROP_DAYS = 5
 RECENT_DROP_RATIO = 0.45
 INTERMITTENT_ZERO_RATIO = 0.5
 STABLE_VOLATILITY_THRESHOLD = 0.8
@@ -907,11 +909,12 @@ def _forecast_daily_sales(
 def _clean_isolated_spikes(values: Sequence[float]) -> tuple[list[float], bool]:
     """Downweight one-off sales spikes that are not sustained by neighboring days."""
     cleaned = [float(value) for value in values]
-    if len(cleaned) < 3:
+    if len(cleaned) < ISOLATED_SPIKE_CONTEXT_DAYS:
         return cleaned, False
 
     changed = False
-    for index in range(1, len(cleaned) - 1):
+    radius = ISOLATED_SPIKE_CONTEXT_DAYS // 2
+    for index in range(radius, len(cleaned) - radius):
         peer_values = cleaned[:index] + cleaned[index + 1 :]
         peer_positive = [value for value in peer_values if value > 0]
         peer_baseline = (
@@ -920,11 +923,15 @@ def _clean_isolated_spikes(values: Sequence[float]) -> tuple[list[float], bool]:
             else float(statistics.median(peer_values))
         )
         baseline = max(1.0, peer_baseline)
-        left = cleaned[index - 1]
-        right = cleaned[index + 1]
+        local_peer_values = (
+            cleaned[index - radius : index]
+            + cleaned[index + 1 : index + radius + 1]
+        )
         if cleaned[index] < max(3.0, baseline * ISOLATED_SPIKE_MULTIPLIER):
             continue
-        if left > baseline * 1.5 or right > baseline * 1.5:
+        if cleaned[index] < ISOLATED_SPIKE_MIN_QTY:
+            continue
+        if any(value > baseline * 1.5 for value in local_peer_values):
             continue
         cleaned[index] = baseline
         changed = True
