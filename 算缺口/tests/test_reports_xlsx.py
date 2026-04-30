@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import sys
+import types
+
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from shipment_planner.reports import (
+    _build_plot_cache,
     _localize_recommendation_row,
     _write_recommendations_xlsx,
 )
@@ -66,6 +70,26 @@ def test_recommendation_xlsx_has_readability_formatting(tmp_path):
     assert worksheet.cell(row=2, column=columns["建议发货量"]).border.left.style == "thin"
     assert worksheet.column_dimensions[get_column_letter(columns["销量与预测曲线"])].width == 46.0
     assert len(worksheet.conditional_formatting) > 0
+
+
+def test_recommendation_plot_title_includes_forecast_model(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_render_sku_plot(**kwargs):
+        captured.update(kwargs)
+        return b"png"
+
+    fake_plots = types.ModuleType("shipment_planner.plots")
+    fake_plots.render_sku_plot = fake_render_sku_plot
+    monkeypatch.setitem(sys.modules, "shipment_planner.plots", fake_plots)
+
+    _build_plot_cache(
+        [_recommendation_row()],
+        {("skc-1", "skuid-1"): (1, 2, 3)},
+    )
+
+    assert captured["title"] == "SKC:skc-1 / SKUID:skuid-1 | tsb"
+    assert captured["forecast_daily_sales"] == 3.0
 
 
 def _write_test_recommendation_report(tmp_path):

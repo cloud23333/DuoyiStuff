@@ -386,14 +386,26 @@ def _build_plot_cache(
             daily_sales=history,
             stock_in_warehouse=_as_float(row.get("wh", 0.0)),
         )
-        title = f"SKC:{key[0]} / SKUID:{key[1]}"
+        title = _plot_title(row, key)
         cache[key] = render_sku_plot(
             history=history,
             forecast=forecast,
             title=title,
             masked_tail_from=masked_tail_from,
+            forecast_daily_sales=_as_float(row.get("forecast_daily_sales", 0.0)),
         )
     return cache
+
+
+def _plot_title(
+    row: dict[str, object],
+    key: tuple[str, str],
+) -> str:
+    base = f"SKC:{key[0]} / SKUID:{key[1]}"
+    model = str(row.get("forecast_model", "") or "").strip()
+    if not model:
+        return base
+    return f"{base} | {model}"
 
 
 def _plot_keys(
