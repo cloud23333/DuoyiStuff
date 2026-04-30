@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections import defaultdict
 import math
 import statistics
+from collections import defaultdict
+from collections.abc import Sequence
 
 from .allocation import allocate_recommendation_quantities
 from .models import ForecastMetrics, KeyState, OrderLine, SalesRecord
@@ -27,6 +28,16 @@ FORECAST_STRATEGY_CONSERVATIVE = "保守"
 FORECAST_STRATEGY_NORMAL = "正常"
 FORECAST_STRATEGY_AGGRESSIVE = "激进"
 FORECAST_STRATEGY_SLOW_MOVER = "慢销"
+FORECAST_STRATEGY_NO_SALES = "无销量"
+
+DEMAND_PROFILE_STABLE = "稳定款"
+DEMAND_PROFILE_VOLATILE = "波动款"
+DEMAND_PROFILE_INTERMITTENT = "慢销/间歇款"
+DEMAND_PROFILE_NO_SALES = "无销量款"
+
+ANOMALY_NONE = "无"
+ANOMALY_ISOLATED_SPIKE = "孤立爆单"
+ANOMALY_RECENT_DROP = "连续暴跌"
 
 # Forecast tuning — EWMA half-lives replace fixed recent-N windows so the
 # trend signal degrades gracefully on short histories and avoids hard cutoffs.
@@ -36,6 +47,16 @@ STRATEGY_DROP_RATIO = 0.6
 STRATEGY_RISE_RATIO = 1.5
 STRATEGY_VOLATILITY_THRESHOLD = 1.2
 ISOLATED_SPIKE_MULTIPLIER = 3.0
+RECENT_DROP_RATIO = 0.45
+INTERMITTENT_ZERO_RATIO = 0.5
+STABLE_VOLATILITY_THRESHOLD = 0.8
+
+SERVICE_LEVEL_NO_SALES = 0.50
+SERVICE_LEVEL_CONSERVATIVE = 0.60
+SERVICE_LEVEL_INTERMITTENT = 0.65
+SERVICE_LEVEL_VOLATILE = 0.70
+SERVICE_LEVEL_NORMAL = 0.75
+SERVICE_LEVEL_AGGRESSIVE = 0.85
 
 
 def build_recommendations(
@@ -149,6 +170,12 @@ def build_recommendations(
                 "line_order_qty": line.quantity,
                 "key_order_qty": key_order_qty,
                 "forecast_strategy": forecast_metrics.strategy,
+                "demand_profile": forecast_metrics.demand_profile,
+                "anomaly_flags": forecast_metrics.anomaly_flags,
+                "service_level": round_qty(forecast_metrics.service_level),
+                "effective_daily_sales": round_qty(
+                    forecast_metrics.effective_daily_sales
+                ),
                 "forecast_daily_sales": round_qty(
                     forecast_metrics.forecast_daily_sales
                 ),
@@ -472,6 +499,7 @@ def _build_key_states(
             daily_sales=masked_daily_sales,
             stocking_days=sales.stocking_days,
             is_hot_style=sales.is_hot_style,
+            stock_in_warehouse=sales.stock_in_warehouse,
         )
         available_stock = (
             sales.stock_in_warehouse + sales.pending_receive + shipping_in_progress
@@ -519,6 +547,7 @@ def compute_forecast_metrics(
         daily_sales=effective_daily,
         stocking_days=stocking_days,
         is_hot_style=is_hot_style,
+        stock_in_warehouse=stock_in_warehouse,
     )
 
 
@@ -573,19 +602,37 @@ def _forecast_metrics(
     daily_sales: tuple[int, ...],
     stocking_days: float,
     is_hot_style: bool,
+    stock_in_warehouse: float = 0.0,
 ) -> ForecastMetrics:
     values = [max(0, int(value)) for value in daily_sales]
-    mean_daily = statistics.fmean(values) if values else 0.0
-    median_daily = float(statistics.median(values)) if values else 0.0
-    ewma_short = _ewma(values, EWMA_SHORT_HALF_LIFE)
-    ewma_long = _ewma(values, EWMA_LONG_HALF_LIFE)
-    trimmed_mean = _trimmed_mean(values)
-    volatility = _volatility(values, mean_daily)
-    isolated_spike = _has_isolated_recent_spike(values, median_daily, ewma_long)
+    cleaned_values, isolated_spike = _clean_isolated_spikes(values)
+    recent_drop = _has_recent_sales_drop(
+        values=cleaned_values,
+        stock_in_warehouse=stock_in_warehouse,
+    )
 
-    if _is_slow_mover(mean_daily=mean_daily, median_daily=median_daily):
+    mean_daily = statistics.fmean(cleaned_values) if cleaned_values else 0.0
+    median_daily = float(statistics.median(cleaned_values)) if cleaned_values else 0.0
+    ewma_short = _ewma(cleaned_values, EWMA_SHORT_HALF_LIFE)
+    ewma_long = _ewma(cleaned_values, EWMA_LONG_HALF_LIFE)
+    trimmed_mean = _trimmed_mean(cleaned_values)
+    volatility = _volatility(cleaned_values, mean_daily)
+    demand_profile = _demand_profile(
+        values=cleaned_values,
+        volatility=volatility,
+        isolated_spike=isolated_spike,
+    )
+    anomaly_flags = _anomaly_flags(
+        isolated_spike=isolated_spike,
+        recent_drop=recent_drop,
+    )
+
+    if demand_profile == DEMAND_PROFILE_NO_SALES:
+        strategy = FORECAST_STRATEGY_NO_SALES
+        effective_daily_sales = 0.0
+    elif demand_profile == DEMAND_PROFILE_INTERMITTENT:
         strategy = FORECAST_STRATEGY_SLOW_MOVER
-        forecast_daily_sales = mean_daily
+        effective_daily_sales = _tsb_daily_sales(cleaned_values)
     else:
         strategy = _forecast_strategy(
             median_daily=median_daily,
@@ -593,34 +640,43 @@ def _forecast_metrics(
             ewma_long=ewma_long,
             volatility=volatility,
             isolated_spike=isolated_spike,
+            recent_drop=recent_drop,
             is_hot_style=is_hot_style,
         )
-        forecast_daily_sales = _forecast_daily_sales(
+        effective_daily_sales = _forecast_daily_sales(
             strategy=strategy,
             median_daily=median_daily,
             ewma_short=ewma_short,
             ewma_long=ewma_long,
             trimmed_mean=trimmed_mean,
         )
+    service_level = _service_level(
+        demand_profile=demand_profile,
+        strategy=strategy,
+        is_hot_style=is_hot_style,
+        isolated_spike=isolated_spike,
+        recent_drop=recent_drop,
+    )
+    forecast_daily_sales = _service_level_daily_sales(
+        effective_daily_sales=effective_daily_sales,
+        values=cleaned_values,
+        service_level=service_level,
+        demand_profile=demand_profile,
+        recent_drop=recent_drop,
+    )
     forecast_stocking_period_sales = forecast_daily_sales * max(0.0, stocking_days)
     return ForecastMetrics(
         strategy=strategy,
         forecast_daily_sales=forecast_daily_sales,
         forecast_stocking_period_sales=forecast_stocking_period_sales,
+        demand_profile=demand_profile,
+        anomaly_flags=anomaly_flags,
+        service_level=service_level,
+        effective_daily_sales=effective_daily_sales,
     )
 
 
-def _is_slow_mover(*, mean_daily: float, median_daily: float) -> bool:
-    """Zero-inflated slow mover: most days sell 0, a few have sales.
-
-    Median=0 but mean>0 is the signature; in that case ``min(median, ...)``
-    in the conservative formula collapses to 0 and replenishment stops. Use
-    the mean (Poisson rate) instead.
-    """
-    return median_daily == 0.0 and mean_daily > 0.0
-
-
-def _ewma(values: list[int], half_life: float) -> float:
+def _ewma(values: Sequence[float], half_life: float) -> float:
     """Exponentially weighted moving average with a half-life decay.
 
     Half-life H means a sample H days old contributes half as much as the
@@ -638,34 +694,17 @@ def _ewma(values: list[int], half_life: float) -> float:
     return result
 
 
-def _trimmed_mean(values: list[int]) -> float:
+def _trimmed_mean(values: Sequence[float]) -> float:
     if len(values) < 5:
         return statistics.fmean(values)
     ordered = sorted(values)
     return statistics.fmean(ordered[1:-1])
 
 
-def _volatility(values: list[int], mean_daily: float) -> float:
+def _volatility(values: Sequence[float], mean_daily: float) -> float:
     if len(values) < 2 or mean_daily <= 0:
         return 0.0
     return statistics.pstdev(values) / mean_daily
-
-
-def _has_isolated_recent_spike(
-    values: list[int],
-    median_daily: float,
-    ewma_long: float,
-) -> bool:
-    if len(values) < 3:
-        return False
-    recent = values[-3:]
-    recent_max = max(recent)
-    baseline = max(1.0, median_daily, ewma_long)
-    if recent_max < baseline * ISOLATED_SPIKE_MULTIPLIER:
-        return False
-    remaining = list(recent)
-    remaining.remove(recent_max)
-    return statistics.fmean(remaining) <= max(1.0, median_daily * 1.2)
 
 
 def _forecast_strategy(
@@ -675,6 +714,7 @@ def _forecast_strategy(
     ewma_long: float,
     volatility: float,
     isolated_spike: bool,
+    recent_drop: bool,
     is_hot_style: bool,
 ) -> str:
     baseline = max(1.0, median_daily)
@@ -685,7 +725,7 @@ def _forecast_strategy(
     trending_up = (
         ewma_short > baseline * STRATEGY_RISE_RATIO and ewma_long >= baseline
     )
-    if trending_down:
+    if recent_drop or trending_down:
         return FORECAST_STRATEGY_CONSERVATIVE
     if volatility > STRATEGY_VOLATILITY_THRESHOLD or isolated_spike:
         return FORECAST_STRATEGY_CONSERVATIVE
@@ -712,3 +752,170 @@ def _forecast_daily_sales(
         cap = max(median_daily * 2.0, ewma_short * 1.2)
         return min(forecast, cap)
     return (median_daily * 0.5) + (ewma_long * 0.5)
+
+
+def _clean_isolated_spikes(values: Sequence[int]) -> tuple[list[float], bool]:
+    """Downweight one-off sales spikes that are not sustained by neighboring days."""
+    cleaned = [float(value) for value in values]
+    if len(cleaned) < 3:
+        return cleaned, False
+
+    changed = False
+    for index in range(1, len(cleaned) - 1):
+        peer_values = cleaned[:index] + cleaned[index + 1 :]
+        peer_positive = [value for value in peer_values if value > 0]
+        peer_baseline = (
+            float(statistics.median(peer_positive))
+            if peer_positive
+            else float(statistics.median(peer_values))
+        )
+        baseline = max(1.0, peer_baseline)
+        left = cleaned[index - 1]
+        right = cleaned[index + 1]
+        if cleaned[index] < max(3.0, baseline * ISOLATED_SPIKE_MULTIPLIER):
+            continue
+        if left > baseline * 1.5 or right > baseline * 1.5:
+            continue
+        cleaned[index] = baseline
+        changed = True
+    return cleaned, changed
+
+
+def _has_recent_sales_drop(
+    *,
+    values: Sequence[float],
+    stock_in_warehouse: float,
+) -> bool:
+    if stock_in_warehouse <= 0 or len(values) < 6:
+        return False
+
+    zero_ratio = sum(1 for value in values if value <= 0) / len(values)
+    if zero_ratio >= INTERMITTENT_ZERO_RATIO:
+        return False
+
+    recent = values[-3:]
+    previous = values[:-3]
+    previous_positive = [value for value in previous if value > 0]
+    if not previous_positive:
+        return False
+
+    baseline = float(statistics.median(previous_positive))
+    if baseline < 2.0:
+        return False
+    return statistics.fmean(recent) <= baseline * RECENT_DROP_RATIO
+
+
+def _demand_profile(
+    *,
+    values: Sequence[float],
+    volatility: float,
+    isolated_spike: bool,
+) -> str:
+    if not values or sum(values) <= 0:
+        return DEMAND_PROFILE_NO_SALES
+
+    zero_ratio = sum(1 for value in values if value <= 0) / len(values)
+    median_daily = float(statistics.median(values))
+    if zero_ratio >= INTERMITTENT_ZERO_RATIO or median_daily == 0.0:
+        return DEMAND_PROFILE_INTERMITTENT
+
+    if isolated_spike or volatility > STABLE_VOLATILITY_THRESHOLD:
+        return DEMAND_PROFILE_VOLATILE
+
+    return DEMAND_PROFILE_STABLE
+
+
+def _anomaly_flags(*, isolated_spike: bool, recent_drop: bool) -> str:
+    flags: list[str] = []
+    if isolated_spike:
+        flags.append(ANOMALY_ISOLATED_SPIKE)
+    if recent_drop:
+        flags.append(ANOMALY_RECENT_DROP)
+    return "、".join(flags) if flags else ANOMALY_NONE
+
+
+def _tsb_daily_sales(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+
+    alpha = 1.0 - 0.5 ** (1.0 / EWMA_LONG_HALF_LIFE)
+    first_nonzero = next((value for value in values if value > 0), 0.0)
+    probability = 1.0 if values[0] > 0 else 0.0
+    demand_size = first_nonzero
+
+    for value in values:
+        occurrence = 1.0 if value > 0 else 0.0
+        probability = alpha * occurrence + (1.0 - alpha) * probability
+        if value > 0:
+            demand_size = alpha * value + (1.0 - alpha) * demand_size
+
+    forecast = probability * demand_size
+    if forecast <= 0 and first_nonzero > 0:
+        return statistics.fmean(values)
+    return forecast
+
+
+def _service_level(
+    *,
+    demand_profile: str,
+    strategy: str,
+    is_hot_style: bool,
+    isolated_spike: bool,
+    recent_drop: bool,
+) -> float:
+    if demand_profile == DEMAND_PROFILE_NO_SALES:
+        return SERVICE_LEVEL_NO_SALES
+    if recent_drop:
+        return SERVICE_LEVEL_CONSERVATIVE
+    if demand_profile == DEMAND_PROFILE_INTERMITTENT:
+        return SERVICE_LEVEL_INTERMITTENT
+    if demand_profile == DEMAND_PROFILE_VOLATILE or isolated_spike:
+        return SERVICE_LEVEL_VOLATILE
+    if is_hot_style or strategy == FORECAST_STRATEGY_AGGRESSIVE:
+        return SERVICE_LEVEL_AGGRESSIVE
+    return SERVICE_LEVEL_NORMAL
+
+
+def _service_level_daily_sales(
+    *,
+    effective_daily_sales: float,
+    values: Sequence[float],
+    service_level: float,
+    demand_profile: str,
+    recent_drop: bool,
+) -> float:
+    if effective_daily_sales <= 0:
+        return 0.0
+    if recent_drop:
+        return effective_daily_sales
+    if demand_profile == DEMAND_PROFILE_INTERMITTENT:
+        return effective_daily_sales * (1.0 + max(0.0, service_level - 0.5))
+
+    empirical_daily = _empirical_quantile(values, service_level)
+    if empirical_daily <= 0:
+        return effective_daily_sales
+    return max(
+        effective_daily_sales,
+        (effective_daily_sales * 0.85) + (empirical_daily * 0.15),
+    )
+
+
+def _empirical_quantile(values: Sequence[float], probability: float) -> float:
+    if not values:
+        return 0.0
+
+    ordered = sorted(max(0.0, float(value)) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+
+    clipped = min(1.0, max(0.0, probability))
+    position = clipped * (len(ordered) - 1)
+    lower_index = math.floor(position)
+    upper_index = math.ceil(position)
+    if lower_index == upper_index:
+        return ordered[lower_index]
+
+    lower_value = ordered[lower_index]
+    upper_value = ordered[upper_index]
+    weight = position - lower_index
+    return lower_value + ((upper_value - lower_value) * weight)

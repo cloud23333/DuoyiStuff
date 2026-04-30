@@ -35,6 +35,10 @@ class ForecastMetrics:
     strategy: str
     forecast_daily_sales: float
     forecast_stocking_period_sales: float
+    demand_profile: str = ""
+    anomaly_flags: str = "无"
+    service_level: float = 0.0
+    effective_daily_sales: float = 0.0
 
 
 @dataclass(slots=True)

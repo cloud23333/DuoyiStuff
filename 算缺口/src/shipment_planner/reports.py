@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import io
 import csv
+import io
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -24,6 +24,10 @@ RECOMMENDATION_FIELDS = [
     ("line_order_qty", "订单行数量"),
     ("key_order_qty", "同SKC_SKUID总下单量"),
     ("forecast_strategy", "预测策略"),
+    ("demand_profile", "需求类型"),
+    ("anomaly_flags", "异常标记"),
+    ("service_level", "服务水平"),
+    ("effective_daily_sales", "异常调整后日均销量"),
     ("forecast_daily_sales", "预测日均销量"),
     ("forecast_stocking_period_sales", "预测备货期销量"),
     ("sku_forecast_abs_error", "SKU预测绝对误差"),
@@ -345,7 +349,9 @@ def _write_recommendations_xlsx(
 
     worksheet.column_dimensions[plot_col_letter].width = PLOT_COLUMN_WIDTH_CHARS
 
-    for row_offset, (localized, source) in enumerate(zip(rows, recommendation_rows)):
+    for row_offset, (localized, source) in enumerate(
+        zip(rows, recommendation_rows, strict=True)
+    ):
         excel_row = row_offset + 2
         for col_idx, name in enumerate(columns, start=1):
             if name == PLOT_COLUMN_NAME:
