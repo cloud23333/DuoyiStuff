@@ -36,6 +36,48 @@ def test_small_intermittent_sales_are_not_marked_as_isolated_spike():
     assert "孤立爆单" not in metrics.anomaly_flags
 
 
+def test_large_order_with_only_small_neighbor_sales_is_isolated_spike():
+    metrics = compute_forecast_metrics(
+        daily_sales=(
+            12,
+            1,
+            0,
+            5,
+            0,
+            1,
+            7,
+            5,
+            3,
+            1,
+            0,
+            1,
+            4,
+            1,
+            2,
+            1,
+            1,
+            5,
+            0,
+            1,
+            5,
+            4,
+            21,
+            0,
+            2,
+            0,
+            1,
+            5,
+            1,
+        ),
+        stocking_days=14,
+        is_hot_style=True,
+        stock_in_warehouse=10,
+    )
+
+    assert "孤立爆单" in metrics.anomaly_flags
+    assert metrics.forecast_daily_sales < 3
+
+
 def test_recent_sales_drop_with_stock_is_conservative_but_not_zero():
     metrics = compute_forecast_metrics(
         daily_sales=(10, 11, 10, 12, 10, 2, 1, 2, 1, 2),
@@ -129,8 +171,21 @@ def test_stockout_tail_zeros_are_not_treated_as_sales_drop():
     )
 
     assert "连续暴跌" not in metrics.anomaly_flags
+    assert "疑似缺货尾部" in metrics.anomaly_flags
     assert metrics.demand_profile == "稳定款"
     assert metrics.forecast_daily_sales > 0
+
+
+def test_tail_zeros_with_stock_are_treated_as_real_sales_drop():
+    metrics = compute_forecast_metrics(
+        daily_sales=(8, 9, 8, 7, 0, 0, 0),
+        stocking_days=7,
+        is_hot_style=False,
+        stock_in_warehouse=10,
+    )
+
+    assert "疑似缺货尾部" not in metrics.anomaly_flags
+    assert metrics.forecast_daily_sales < 8
 
 
 def test_stable_hot_style_uses_aggressive_service_level():

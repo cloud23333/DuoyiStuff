@@ -148,7 +148,7 @@ def test_single_day_big_order_without_small_sales_uses_base_stock_only():
     )
 
     row = recommendations[0]
-    assert row["anomaly_flags"] == "单日大单"
+    assert row["anomaly_flags"] == "单日大单、疑似缺货尾部"
     assert row["forecast_daily_sales"] == 0
     assert row["forecast_stocking_period_sales"] == 0
     assert row["gap"] == 2
@@ -266,6 +266,16 @@ def test_summary_includes_forecast_explanation_distributions():
                 "service_level": 0.0,
                 "forecast_model": "current",
             },
+            {
+                "decision_reason": "ship_partial",
+                "sku_code_check": "exact_match",
+                "recommended_ship": 1,
+                "forecast_strategy": "conservative",
+                "demand_profile": "稳定款",
+                "anomaly_flags": "疑似缺货尾部",
+                "service_level": 0.60,
+                "forecast_model": "current",
+            },
         ],
         quality_rows=[],
         duplicate_keys=set(),
@@ -282,8 +292,8 @@ def test_summary_includes_forecast_explanation_distributions():
         base_stock_qty=2,
     )
 
-    assert summary["demand_profile_summary"] == "稳定款 1，波动款 1，慢销/间歇款 1"
-    assert summary["anomaly_flag_summary"] == "孤立爆单 1，连续暴跌 1"
-    assert summary["service_level_summary"] == "P75 1，P70 1，P65 1"
-    assert summary["forecast_model_summary"] == "tsb 1，imapa 1，current 1"
+    assert summary["demand_profile_summary"] == "稳定款 2，波动款 1，慢销/间歇款 1"
+    assert summary["anomaly_flag_summary"] == "孤立爆单 1，疑似缺货尾部 1，连续暴跌 1"
+    assert summary["service_level_summary"] == "P75 1，P70 1，P65 1，P60 1"
+    assert summary["forecast_model_summary"] == "tsb 1，imapa 1，current 2"
     assert summary["base_stock_qty"] == 2
