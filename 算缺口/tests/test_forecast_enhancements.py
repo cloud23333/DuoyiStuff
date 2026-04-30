@@ -39,6 +39,20 @@ def test_recent_sales_drop_with_stock_is_conservative_but_not_zero():
     assert 0 < metrics.forecast_daily_sales < 10
 
 
+def test_recent_sales_collapse_to_zero_with_stock_forecasts_zero():
+    metrics = compute_forecast_metrics(
+        daily_sales=(10, 11, 10, 12, 10, 0, 0, 0),
+        stocking_days=7,
+        is_hot_style=False,
+        stock_in_warehouse=20,
+    )
+
+    assert metrics.strategy == FORECAST_STRATEGY_CONSERVATIVE
+    assert "连续暴跌" in metrics.anomaly_flags
+    assert metrics.forecast_daily_sales == 0
+    assert metrics.forecast_stocking_period_sales == 0
+
+
 def test_intermittent_sales_use_slow_mover_profile_without_collapsing():
     metrics = compute_forecast_metrics(
         daily_sales=(0, 0, 3, 0, 0, 0, 4, 0, 0, 2, 0, 0),
@@ -53,6 +67,20 @@ def test_intermittent_sales_use_slow_mover_profile_without_collapsing():
     assert metrics.service_level == pytest.approx(0.65)
     assert metrics.effective_daily_sales > 0
     assert metrics.forecast_daily_sales > 0
+
+
+def test_single_big_order_with_small_sales_uses_small_sale_baseline():
+    metrics = compute_forecast_metrics(
+        daily_sales=(0, 1, 0, 2, 0, 50, 0, 1, 0, 2, 0),
+        stocking_days=7,
+        is_hot_style=False,
+        stock_in_warehouse=10,
+    )
+
+    assert "单日大单" in metrics.anomaly_flags
+    assert metrics.demand_profile == "慢销/间歇款"
+    assert metrics.forecast_daily_sales > 0
+    assert metrics.forecast_daily_sales < 1
 
 
 def test_all_zero_sales_are_classified_as_no_sales():

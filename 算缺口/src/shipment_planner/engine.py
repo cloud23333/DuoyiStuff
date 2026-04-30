@@ -45,6 +45,7 @@ DEMAND_PROFILE_NO_SALES = "无销量款"
 ANOMALY_NONE = "无"
 ANOMALY_ISOLATED_SPIKE = "孤立爆单"
 ANOMALY_RECENT_DROP = "连续暴跌"
+ANOMALY_SINGLE_DAY_BIG_ORDER = "单日大单"
 
 # Forecast tuning — EWMA half-lives replace fixed recent-N windows so the
 # trend signal degrades gracefully on short histories and avoids hard cutoffs.
@@ -54,6 +55,11 @@ STRATEGY_DROP_RATIO = 0.6
 STRATEGY_RISE_RATIO = 1.5
 STRATEGY_VOLATILITY_THRESHOLD = 1.2
 ISOLATED_SPIKE_MULTIPLIER = 3.0
+SINGLE_DAY_BIG_ORDER_MIN_QTY = 10.0
+SINGLE_DAY_BIG_ORDER_SHARE = 0.70
+SINGLE_DAY_BIG_ORDER_PEER_MULTIPLIER = 5.0
+SINGLE_DAY_BIG_ORDER_MIN_SMALL_SALE_DAYS = 2
+RECENT_DROP_DAYS = 3
 RECENT_DROP_RATIO = 0.45
 INTERMITTENT_ZERO_RATIO = 0.5
 STABLE_VOLATILITY_THRESHOLD = 0.8
@@ -527,16 +533,25 @@ def _build_key_states(
             )
             continue
 
-        masked_daily_sales = _mask_stockout_tail(
-            daily_sales=daily_sales_by_key[key],
-            stock_in_warehouse=sales.stock_in_warehouse,
-        )
-        forecast_metrics = _forecast_metrics(
-            daily_sales=masked_daily_sales,
-            stocking_days=sales.stocking_days,
-            is_hot_style=sales.is_hot_style,
-            stock_in_warehouse=sales.stock_in_warehouse,
-        )
+        (
+            adjusted_daily_sales,
+            single_day_big_order,
+            base_stock_only,
+        ) = _adjust_single_day_big_order(daily_sales_by_key[key])
+        if base_stock_only:
+            forecast_metrics = _single_day_big_order_base_stock_metrics()
+        else:
+            masked_daily_sales = _mask_stockout_tail(
+                daily_sales=adjusted_daily_sales,
+                stock_in_warehouse=sales.stock_in_warehouse,
+            )
+            forecast_metrics = _forecast_metrics(
+                daily_sales=masked_daily_sales,
+                stocking_days=sales.stocking_days,
+                is_hot_style=sales.is_hot_style,
+                stock_in_warehouse=sales.stock_in_warehouse,
+                single_day_big_order=single_day_big_order,
+            )
         forecast_gap = max(
             0.0,
             forecast_metrics.forecast_stocking_period_sales - available_stock,
@@ -576,6 +591,62 @@ def _base_stock_gap(*, base_stock_qty: int, available_stock: float) -> float:
     return max(0.0, float(base_stock_qty) - available_stock)
 
 
+def _adjust_single_day_big_order(
+    daily_sales: Sequence[float],
+) -> tuple[tuple[float, ...], bool, bool]:
+    values = tuple(max(0.0, float(value)) for value in daily_sales)
+    if not values:
+        return values, False, False
+
+    max_qty = max(values)
+    if max_qty < SINGLE_DAY_BIG_ORDER_MIN_QTY:
+        return values, False, False
+    if values.count(max_qty) != 1:
+        return values, False, False
+
+    max_index = values.index(max_qty)
+    peer_positive = [
+        value for index, value in enumerate(values) if index != max_index and value > 0
+    ]
+    positive_day_count = len(peer_positive) + 1
+    if positive_day_count == 1:
+        is_single_day_big_order = True
+    else:
+        total_sales = sum(values)
+        peer_median = float(statistics.median(peer_positive))
+        is_single_day_big_order = (
+            total_sales > 0
+            and max_qty / total_sales >= SINGLE_DAY_BIG_ORDER_SHARE
+            and max_qty >= peer_median * SINGLE_DAY_BIG_ORDER_PEER_MULTIPLIER
+        )
+
+    if not is_single_day_big_order:
+        return values, False, False
+
+    has_small_sale_baseline = (
+        len(peer_positive) >= SINGLE_DAY_BIG_ORDER_MIN_SMALL_SALE_DAYS
+    )
+    if not has_small_sale_baseline:
+        return values, True, True
+
+    adjusted = list(values)
+    adjusted[max_index] = float(statistics.median(peer_positive))
+    return tuple(adjusted), True, False
+
+
+def _single_day_big_order_base_stock_metrics() -> ForecastMetrics:
+    return ForecastMetrics(
+        strategy=FORECAST_STRATEGY_CONSERVATIVE,
+        forecast_daily_sales=0.0,
+        forecast_stocking_period_sales=0.0,
+        demand_profile=DEMAND_PROFILE_INTERMITTENT,
+        anomaly_flags=ANOMALY_SINGLE_DAY_BIG_ORDER,
+        service_level=SERVICE_LEVEL_CONSERVATIVE,
+        forecast_model=MODEL_CURRENT,
+        effective_daily_sales=0.0,
+    )
+
+
 def compute_forecast_metrics(
     *,
     daily_sales: tuple[int, ...],
@@ -585,27 +656,36 @@ def compute_forecast_metrics(
     apply_stockout_mask: bool = True,
 ) -> ForecastMetrics:
     """Public wrapper for the forecast pipeline (used by eval harness + engine)."""
+    (
+        adjusted_daily_sales,
+        single_day_big_order,
+        base_stock_only,
+    ) = _adjust_single_day_big_order(daily_sales)
+    if base_stock_only:
+        return _single_day_big_order_base_stock_metrics()
+
     effective_daily = (
         _mask_stockout_tail(
-            daily_sales=daily_sales,
+            daily_sales=adjusted_daily_sales,
             stock_in_warehouse=stock_in_warehouse,
         )
         if apply_stockout_mask
-        else daily_sales
+        else adjusted_daily_sales
     )
     return _forecast_metrics(
         daily_sales=effective_daily,
         stocking_days=stocking_days,
         is_hot_style=is_hot_style,
         stock_in_warehouse=stock_in_warehouse,
+        single_day_big_order=single_day_big_order,
     )
 
 
 def _mask_stockout_tail(
     *,
-    daily_sales: tuple[int, ...],
+    daily_sales: tuple[float, ...],
     stock_in_warehouse: float,
-) -> tuple[int, ...]:
+) -> tuple[float, ...]:
     """Strip trailing zero-sale days when the SKU is currently out of stock.
 
     Trailing zeros during an out-of-stock period are driven by unavailability,
@@ -624,7 +704,7 @@ def _mask_stockout_tail(
 
 def stockout_mask_cut(
     *,
-    daily_sales: tuple[int, ...],
+    daily_sales: tuple[float, ...],
     stock_in_warehouse: float,
 ) -> int | None:
     """Return the index where the stockout mask starts, or None if no mask applies.
@@ -649,12 +729,13 @@ def stockout_mask_cut(
 
 def _forecast_metrics(
     *,
-    daily_sales: tuple[int, ...],
+    daily_sales: Sequence[float],
     stocking_days: float,
     is_hot_style: bool,
     stock_in_warehouse: float = 0.0,
+    single_day_big_order: bool = False,
 ) -> ForecastMetrics:
-    values = [max(0, int(value)) for value in daily_sales]
+    values = [max(0.0, float(value)) for value in daily_sales]
     cleaned_values, isolated_spike = _clean_isolated_spikes(values)
     recent_drop = _has_recent_sales_drop(
         values=cleaned_values,
@@ -675,6 +756,7 @@ def _forecast_metrics(
     anomaly_flags = _anomaly_flags(
         isolated_spike=isolated_spike,
         recent_drop=recent_drop,
+        single_day_big_order=single_day_big_order,
     )
 
     if demand_profile == DEMAND_PROFILE_NO_SALES:
@@ -699,6 +781,11 @@ def _forecast_metrics(
             ewma_short=ewma_short,
             ewma_long=ewma_long,
             trimmed_mean=trimmed_mean,
+        )
+    if recent_drop:
+        effective_daily_sales = min(
+            effective_daily_sales,
+            _recent_sales_average(cleaned_values, days=RECENT_DROP_DAYS),
         )
     service_level = _service_level(
         demand_profile=demand_profile,
@@ -817,7 +904,7 @@ def _forecast_daily_sales(
     return (median_daily * 0.5) + (ewma_long * 0.5)
 
 
-def _clean_isolated_spikes(values: Sequence[int]) -> tuple[list[float], bool]:
+def _clean_isolated_spikes(values: Sequence[float]) -> tuple[list[float], bool]:
     """Downweight one-off sales spikes that are not sustained by neighboring days."""
     cleaned = [float(value) for value in values]
     if len(cleaned) < 3:
@@ -856,8 +943,8 @@ def _has_recent_sales_drop(
     if zero_ratio >= INTERMITTENT_ZERO_RATIO:
         return False
 
-    recent = values[-3:]
-    previous = values[:-3]
+    recent = values[-RECENT_DROP_DAYS:]
+    previous = values[:-RECENT_DROP_DAYS]
     previous_positive = [value for value in previous if value > 0]
     if not previous_positive:
         return False
@@ -866,6 +953,13 @@ def _has_recent_sales_drop(
     if baseline < 2.0:
         return False
     return statistics.fmean(recent) <= baseline * RECENT_DROP_RATIO
+
+
+def _recent_sales_average(values: Sequence[float], *, days: int) -> float:
+    if days <= 0 or not values:
+        return 0.0
+    recent = values[-days:]
+    return statistics.fmean(recent) if recent else 0.0
 
 
 def _demand_profile(
@@ -888,8 +982,15 @@ def _demand_profile(
     return DEMAND_PROFILE_STABLE
 
 
-def _anomaly_flags(*, isolated_spike: bool, recent_drop: bool) -> str:
+def _anomaly_flags(
+    *,
+    isolated_spike: bool,
+    recent_drop: bool,
+    single_day_big_order: bool,
+) -> str:
     flags: list[str] = []
+    if single_day_big_order:
+        flags.append(ANOMALY_SINGLE_DAY_BIG_ORDER)
     if isolated_spike:
         flags.append(ANOMALY_ISOLATED_SPIKE)
     if recent_drop:

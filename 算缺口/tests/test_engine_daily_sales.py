@@ -32,6 +32,7 @@ def _sales_record(
     stock_in_warehouse: float = 0,
     pending_receive: float = 0,
     pending_ship: float = 0,
+    is_hot_style: bool = False,
     skc: str = "1064826604",
     skuid: str = "8482832088",
     system_sku: str = "SKU-1",
@@ -42,7 +43,7 @@ def _sales_record(
         skc=skc,
         skuid=skuid,
         system_sku=system_sku,
-        is_hot_style=False,
+        is_hot_style=is_hot_style,
         stocking_days=stocking_days,
         stock_in_warehouse=stock_in_warehouse,
         pending_receive=pending_receive,
@@ -99,6 +100,57 @@ def test_all_zero_sales_gets_default_base_stock_recommendation():
     row = recommendations[0]
     assert row["demand_profile"] == "无销量款"
     assert row["forecast_daily_sales"] == 0
+    assert row["gap"] == 2
+    assert row["recommended_ship"] == 2
+    assert row["base_stock_triggered_warning"] == "yes"
+    assert row["min_order_ship_qty_exempt_applied_warning"] == "yes"
+    assert summary["base_stock_triggered_skus"] == 1
+    assert summary["base_stock_triggered_lines"] == 1
+
+
+def test_single_day_big_order_without_small_sales_uses_base_stock_only():
+    recommendations, _quality_rows, summary = build_recommendations(
+        order_lines=[_order_line(quantity=36)],
+        sales_records=[_sales_record(is_hot_style=True, stocking_days=17)],
+        daily_sales_by_key={
+            ("1064826604", "8482832088"): (
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                47,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+        },
+    )
+
+    row = recommendations[0]
+    assert row["anomaly_flags"] == "单日大单"
+    assert row["forecast_daily_sales"] == 0
+    assert row["forecast_stocking_period_sales"] == 0
     assert row["gap"] == 2
     assert row["recommended_ship"] == 2
     assert row["base_stock_triggered_warning"] == "yes"
