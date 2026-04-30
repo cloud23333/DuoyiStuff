@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +32,7 @@ from planner_ui.workflow import (
     get_constraints_path,
     run_planner,
 )
+from shipment_planner.engine import DEFAULT_BASE_STOCK_QTY
 
 CompletionDialogAction = Literal["open_recommendation", "open_output_dir"]
 
@@ -41,6 +43,7 @@ class RunRequest:
     sales_path: Path
     output_dir: Path
     global_gap_multiplier: float
+    base_stock_qty: int
     temu_sales_path: Path
 
 
@@ -55,6 +58,7 @@ class PlannerRunWorker(QObject):
         sales_path: Path,
         output_dir: Path,
         global_gap_multiplier: float,
+        base_stock_qty: int,
         temu_sales_path: Path,
     ) -> None:
         super().__init__()
@@ -62,6 +66,7 @@ class PlannerRunWorker(QObject):
         self._sales_path = sales_path
         self._output_dir = output_dir
         self._global_gap_multiplier = global_gap_multiplier
+        self._base_stock_qty = base_stock_qty
         self._temu_sales_path = temu_sales_path
 
     @pyqtSlot()
@@ -72,6 +77,7 @@ class PlannerRunWorker(QObject):
                 sales_path=self._sales_path,
                 output_dir=self._output_dir,
                 global_gap_multiplier=self._global_gap_multiplier,
+                base_stock_qty=self._base_stock_qty,
                 temu_sales_path=self._temu_sales_path,
             )
         except Exception as exc:  # pragma: no cover - UI error channel
@@ -190,7 +196,7 @@ class PlannerWindow(QMainWindow):
         params_grid = QGridLayout()
         params_grid.setHorizontalSpacing(8)
         params_grid.setVerticalSpacing(6)
-        params_grid.setColumnStretch(2, 1)
+        params_grid.setColumnStretch(4, 1)
 
         self.global_gap_multiplier_spin = QDoubleSpinBox()
         self.global_gap_multiplier_spin.setDecimals(2)
@@ -198,6 +204,12 @@ class PlannerWindow(QMainWindow):
         self.global_gap_multiplier_spin.setSingleStep(0.01)
         self.global_gap_multiplier_spin.setValue(1.0)
         self.global_gap_multiplier_spin.setFixedWidth(108)
+
+        self.base_stock_qty_spin = QSpinBox()
+        self.base_stock_qty_spin.setRange(0, 9999)
+        self.base_stock_qty_spin.setSingleStep(1)
+        self.base_stock_qty_spin.setValue(DEFAULT_BASE_STOCK_QTY)
+        self.base_stock_qty_spin.setFixedWidth(108)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
@@ -211,6 +223,8 @@ class PlannerWindow(QMainWindow):
 
         params_grid.addWidget(QLabel("缺口系数"), 0, 0)
         params_grid.addWidget(self.global_gap_multiplier_spin, 0, 1)
+        params_grid.addWidget(QLabel("保底库存"), 0, 2)
+        params_grid.addWidget(self.base_stock_qty_spin, 0, 3)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -469,6 +483,7 @@ class PlannerWindow(QMainWindow):
             self.temu_browse_button,
             self.open_config_dir_button,
             self.global_gap_multiplier_spin,
+            self.base_stock_qty_spin,
             self.clear_log_button,
         ):
             control.setEnabled(not running)
@@ -519,6 +534,7 @@ class PlannerWindow(QMainWindow):
             sales_path=Path(sales_text),
             output_dir=Path(output_text),
             global_gap_multiplier=float(self.global_gap_multiplier_spin.value()),
+            base_stock_qty=int(self.base_stock_qty_spin.value()),
             temu_sales_path=Path(temu_text),
         )
 
@@ -528,6 +544,7 @@ class PlannerWindow(QMainWindow):
             temu_sales_path=run_request.temu_sales_path,
             output_dir=run_request.output_dir,
             global_gap_multiplier=run_request.global_gap_multiplier,
+            base_stock_qty=run_request.base_stock_qty,
         )
         if validation_error is not None:
             self._set_status(validation_error, error=True)
@@ -547,6 +564,7 @@ class PlannerWindow(QMainWindow):
             sales_path=run_request.sales_path,
             output_dir=run_request.output_dir,
             global_gap_multiplier=run_request.global_gap_multiplier,
+            base_stock_qty=run_request.base_stock_qty,
             temu_sales_path=run_request.temu_sales_path,
         )
         self._run_worker.moveToThread(self._run_thread)
@@ -671,6 +689,7 @@ class PlannerWindow(QMainWindow):
         temu_sales_path: Path,
         output_dir: Path,
         global_gap_multiplier: float,
+        base_stock_qty: int,
     ) -> str | None:
         if not orders_path.exists():
             return f"订单文件不存在：{orders_path}"
@@ -697,6 +716,8 @@ class PlannerWindow(QMainWindow):
             return f"输出路径不是目录：{output_dir}"
         if global_gap_multiplier <= 0:
             return "全局缺口上浮系数必须大于 0。"
+        if base_stock_qty < 0:
+            return "保底库存不能小于 0。"
         return None
 
 

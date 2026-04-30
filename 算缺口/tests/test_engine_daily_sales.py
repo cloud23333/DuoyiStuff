@@ -7,32 +7,55 @@ from shipment_planner.models import OrderLine, SalesRecord
 from shipment_planner.summary import build_summary
 
 
-def test_missing_daily_sales_row_warns_and_holds_recommendation():
+def _order_line(
+    *,
+    quantity: int = 12,
+    skc: str = "1064826604",
+    skuid: str = "8482832088",
+    order_sku: str = "SKU-1",
+) -> OrderLine:
+    return OrderLine(
+        row_number=2,
+        internal_order_id="order-1",
+        skc=skc,
+        skuid=skuid,
+        product_code=order_sku,
+        order_sku=order_sku,
+        status="待发货",
+        order_time=datetime(2026, 4, 21, 10, 0),
+        quantity=quantity,
+    )
+
+
+def _sales_record(
+    *,
+    stock_in_warehouse: float = 0,
+    pending_receive: float = 0,
+    pending_ship: float = 0,
+    skc: str = "1064826604",
+    skuid: str = "8482832088",
+    system_sku: str = "SKU-1",
+    stocking_days: float = 7,
+) -> SalesRecord:
+    return SalesRecord(
+        row_number=3,
+        skc=skc,
+        skuid=skuid,
+        system_sku=system_sku,
+        is_hot_style=False,
+        stocking_days=stocking_days,
+        stock_in_warehouse=stock_in_warehouse,
+        pending_receive=pending_receive,
+        pending_ship=pending_ship,
+    )
+
+
+def test_missing_daily_sales_row_warns_and_uses_base_stock():
     order_lines = [
-        OrderLine(
-            row_number=2,
-            internal_order_id="order-1",
-            skc="1064826604",
-            skuid="8482832088",
-            product_code="SKU-1",
-            order_sku="SKU-1",
-            status="待发货",
-            order_time=datetime(2026, 4, 21, 10, 0),
-            quantity=12,
-        )
+        _order_line()
     ]
     sales_records = [
-        SalesRecord(
-            row_number=3,
-            skc="1064826604",
-            skuid="8482832088",
-            system_sku="SKU-1",
-            is_hot_style=False,
-            stocking_days=7,
-            stock_in_warehouse=0,
-            pending_receive=0,
-            pending_ship=0,
-        )
+        _sales_record()
     ]
 
     recommendations, quality_rows, summary = build_recommendations(
@@ -43,8 +66,12 @@ def test_missing_daily_sales_row_warns_and_holds_recommendation():
 
     assert recommendations[0]["forecast_daily_sales"] == 0
     assert recommendations[0]["forecast_stocking_period_sales"] == 0
-    assert recommendations[0]["gap"] == 0
-    assert recommendations[0]["recommended_ship"] == 0
+    assert recommendations[0]["gap"] == 2
+    assert recommendations[0]["base_stock_qty"] == 2
+    assert recommendations[0]["base_stock_gap"] == 2
+    assert recommendations[0]["base_stock_triggered_warning"] == "yes"
+    assert recommendations[0]["recommended_ship"] == 2
+    assert recommendations[0]["min_order_ship_qty_exempt_applied_warning"] == "yes"
     assert quality_rows == [
         {
             "type": "missing_daily_sales",
@@ -58,6 +85,88 @@ def test_missing_daily_sales_row_warns_and_holds_recommendation():
         }
     ]
     assert summary["quality_issue_rows"] == 1
+    assert summary["base_stock_triggered_skus"] == 1
+    assert summary["base_stock_triggered_lines"] == 1
+
+
+def test_all_zero_sales_gets_default_base_stock_recommendation():
+    recommendations, _quality_rows, summary = build_recommendations(
+        order_lines=[_order_line(quantity=8)],
+        sales_records=[_sales_record()],
+        daily_sales_by_key={("1064826604", "8482832088"): (0, 0, 0, 0, 0)},
+    )
+
+    row = recommendations[0]
+    assert row["demand_profile"] == "无销量款"
+    assert row["forecast_daily_sales"] == 0
+    assert row["gap"] == 2
+    assert row["recommended_ship"] == 2
+    assert row["base_stock_triggered_warning"] == "yes"
+    assert row["min_order_ship_qty_exempt_applied_warning"] == "yes"
+    assert summary["base_stock_triggered_skus"] == 1
+    assert summary["base_stock_triggered_lines"] == 1
+
+
+def test_base_stock_does_not_trigger_when_available_stock_reaches_target():
+    recommendations, _quality_rows, summary = build_recommendations(
+        order_lines=[_order_line(quantity=8)],
+        sales_records=[_sales_record(stock_in_warehouse=1, pending_receive=1)],
+        daily_sales_by_key={("1064826604", "8482832088"): (0, 0, 0, 0, 0)},
+    )
+
+    row = recommendations[0]
+    assert row["gap"] == 0
+    assert row["recommended_ship"] == 0
+    assert row["base_stock_gap"] == 0
+    assert row["base_stock_triggered_warning"] == "no"
+    assert summary["base_stock_triggered_skus"] == 0
+    assert summary["base_stock_triggered_lines"] == 0
+
+
+def test_forecast_gap_takes_precedence_when_larger_than_base_stock_gap():
+    recommendations, _quality_rows, _summary = build_recommendations(
+        order_lines=[_order_line(quantity=50)],
+        sales_records=[_sales_record()],
+        daily_sales_by_key={("1064826604", "8482832088"): (5, 5, 5, 5, 5, 5, 5)},
+    )
+
+    row = recommendations[0]
+    assert row["base_stock_gap"] == 2
+    assert row["base_stock_triggered_warning"] == "no"
+    assert row["gap"] > row["base_stock_gap"]
+    assert row["recommended_ship"] > row["base_stock_gap"]
+
+
+def test_base_stock_can_be_disabled():
+    recommendations, _quality_rows, summary = build_recommendations(
+        order_lines=[_order_line(quantity=8)],
+        sales_records=[_sales_record()],
+        daily_sales_by_key={("1064826604", "8482832088"): (0, 0, 0, 0, 0)},
+        base_stock_qty=0,
+    )
+
+    row = recommendations[0]
+    assert row["gap"] == 0
+    assert row["recommended_ship"] == 0
+    assert row["base_stock_qty"] == 0
+    assert row["base_stock_triggered_warning"] == "no"
+    assert summary["base_stock_triggered_skus"] == 0
+
+
+def test_excluded_skc_still_blocks_base_stock_recommendation():
+    recommendations, _quality_rows, summary = build_recommendations(
+        order_lines=[_order_line(quantity=8)],
+        sales_records=[_sales_record()],
+        daily_sales_by_key={("1064826604", "8482832088"): (0, 0, 0, 0, 0)},
+        exclude_skc={"1064826604"},
+    )
+
+    row = recommendations[0]
+    assert row["base_stock_triggered_warning"] == "yes"
+    assert row["intercept_reason"] == "skc"
+    assert row["recommended_ship"] == 0
+    assert summary["base_stock_triggered_skus"] == 0
+    assert summary["base_stock_triggered_lines"] == 0
 
 
 def test_summary_includes_forecast_explanation_distributions():
@@ -118,9 +227,11 @@ def test_summary_includes_forecast_explanation_distributions():
         intercepted_orders=0,
         small_change_kept_lines=0,
         global_gap_multiplier=1.0,
+        base_stock_qty=2,
     )
 
     assert summary["demand_profile_summary"] == "稳定款 1，波动款 1，慢销/间歇款 1"
     assert summary["anomaly_flag_summary"] == "孤立爆单 1，连续暴跌 1"
     assert summary["service_level_summary"] == "P75 1，P70 1，P65 1"
     assert summary["forecast_model_summary"] == "tsb 1，imapa 1，current 1"
+    assert summary["base_stock_qty"] == 2

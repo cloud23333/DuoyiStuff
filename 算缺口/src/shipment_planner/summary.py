@@ -25,6 +25,7 @@ def build_summary(
     intercepted_orders: int,
     small_change_kept_lines: int,
     global_gap_multiplier: float,
+    base_stock_qty: int,
 ) -> dict[str, object]:
     order_line_count = len(order_lines)
     matched_count = sum(
@@ -40,6 +41,17 @@ def build_summary(
     )
     total_order_qty = sum(line.quantity for line in order_lines)
     total_recommended_qty = sum(int(row["recommended_ship"]) for row in recommendations)
+    base_stock_triggered_rows = [
+        row
+        for row in recommendations
+        if str(row.get("base_stock_triggered_warning", "")) == "yes"
+        and int(row.get("recommended_ship", 0)) > 0
+        and not str(row.get("intercept_reason", "")).strip()
+    ]
+    base_stock_triggered_skus = {
+        (str(row.get("店铺款式编码", "")), str(row.get("店铺商品编码", "")))
+        for row in base_stock_triggered_rows
+    }
 
     return {
         "order_lines": order_line_count,
@@ -68,6 +80,9 @@ def build_summary(
         "intercepted_orders": intercepted_orders,
         "small_change_kept_lines": small_change_kept_lines,
         "global_gap_multiplier": round_qty(global_gap_multiplier),
+        "base_stock_qty": base_stock_qty,
+        "base_stock_triggered_skus": len(base_stock_triggered_skus),
+        "base_stock_triggered_lines": len(base_stock_triggered_rows),
         "low_qty_orders_before_exempt": threshold_stats.get(
             "low_qty_orders_before_exempt",
             0,

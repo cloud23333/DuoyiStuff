@@ -52,3 +52,6 @@ class KeyState:
     recommended_qty_total: int
     forecast_metrics: ForecastMetrics
     min_order_ship_qty_exempt_eligible: bool
+    base_stock_qty: int = 0
+    base_stock_gap: int = 0
+    base_stock_triggered: bool = False

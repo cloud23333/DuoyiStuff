@@ -29,6 +29,7 @@ from .summary import build_summary
 
 HOT_STYLE_GAP_MULTIPLIER = 1.2
 DEFAULT_GLOBAL_GAP_MULTIPLIER = 1.0
+DEFAULT_BASE_STOCK_QTY = 2
 SMALL_CHANGE_KEEP_RATIO = 0.3
 FORECAST_STRATEGY_CONSERVATIVE = "保守"
 FORECAST_STRATEGY_NORMAL = "正常"
@@ -74,10 +75,13 @@ def build_recommendations(
     exclude_skuid: set[str] | None = None,
     shipping_in_progress_by_key: dict[tuple[str, str], int] | None = None,
     global_gap_multiplier: float = DEFAULT_GLOBAL_GAP_MULTIPLIER,
+    base_stock_qty: int = DEFAULT_BASE_STOCK_QTY,
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
     if global_gap_multiplier <= 0:
         raise ValueError("global_gap_multiplier must be greater than 0.")
+    if base_stock_qty < 0:
+        raise ValueError("base_stock_qty must be greater than or equal to 0.")
 
     ordered_lines = sorted(order_lines, key=lambda line: line.row_number)
     normalized_sku_limits = _normalize_sku_limits(sku_order_max_qty)
@@ -94,6 +98,7 @@ def build_recommendations(
         missing_daily_sales_keys=missing_daily_sales_keys,
         shipping_in_progress_by_key=shipping_in_progress_lookup,
         global_gap_multiplier=global_gap_multiplier,
+        base_stock_qty=base_stock_qty,
     )
     suggested_by_row, sku_order_limit_capped_rows = (
         allocate_recommendation_quantities(
@@ -137,6 +142,11 @@ def build_recommendations(
             state.forecast_metrics
             if state is not None
             else ForecastMetrics("", 0.0, 0.0)
+        )
+        base_stock_target = state.base_stock_qty if state is not None else 0
+        base_stock_gap = state.base_stock_gap if state is not None else 0
+        base_stock_triggered = (
+            state.base_stock_triggered if state is not None else False
         )
         is_min_order_ship_qty_exempt_eligible = (
             state.min_order_ship_qty_exempt_eligible if state is not None else False
@@ -195,6 +205,11 @@ def build_recommendations(
                 "pending_ship": round_qty(pending_ship),
                 "shipping_in_progress": shipping_in_progress,
                 "gap": gap,
+                "base_stock_qty": base_stock_target,
+                "base_stock_gap": base_stock_gap,
+                "base_stock_triggered_warning": (
+                    "yes" if base_stock_triggered else "no"
+                ),
                 "recommended_ship": suggested_qty,
                 "recommended_ship_before_small_change_rule": suggested_qty,
                 "small_change_ratio_before_rule": round_qty(
@@ -255,6 +270,7 @@ def build_recommendations(
         intercepted_orders=intercept_stats.get("intercepted_orders", 0),
         small_change_kept_lines=small_change_stats.get("small_change_kept_lines", 0),
         global_gap_multiplier=global_gap_multiplier,
+        base_stock_qty=base_stock_qty,
     )
     return recommendations, quality_rows, summary
 
@@ -466,6 +482,7 @@ def _build_key_states(
     missing_daily_sales_keys: set[tuple[str, str]],
     shipping_in_progress_by_key: dict[tuple[str, str], int],
     global_gap_multiplier: float,
+    base_stock_qty: int,
 ) -> dict[tuple[str, str], KeyState]:
     states: dict[tuple[str, str], KeyState] = {}
     for key, order_qty_total in key_demand.items():
@@ -484,20 +501,32 @@ def _build_key_states(
             )
             continue
 
+        shipping_in_progress = shipping_in_progress_by_key.get(key, 0)
+        available_stock = (
+            sales.stock_in_warehouse + sales.pending_receive + shipping_in_progress
+        )
         if key in missing_daily_sales_keys:
+            base_stock_gap_raw = _base_stock_gap(
+                base_stock_qty=base_stock_qty,
+                available_stock=available_stock,
+            )
+            gap = math.ceil(base_stock_gap_raw)
+            base_stock_triggered = base_stock_gap_raw > 0
             states[key] = KeyState(
                 skc=skc,
                 skuid=skuid,
                 system_sku=sales.system_sku,
                 order_qty_total=order_qty_total,
-                gap=0,
-                recommended_qty_total=0,
+                gap=gap,
+                recommended_qty_total=min(order_qty_total, gap),
                 forecast_metrics=ForecastMetrics("", 0.0, 0.0),
-                min_order_ship_qty_exempt_eligible=False,
+                min_order_ship_qty_exempt_eligible=base_stock_triggered,
+                base_stock_qty=base_stock_qty,
+                base_stock_gap=gap,
+                base_stock_triggered=base_stock_triggered,
             )
             continue
 
-        shipping_in_progress = shipping_in_progress_by_key.get(key, 0)
         masked_daily_sales = _mask_stockout_tail(
             daily_sales=daily_sales_by_key[key],
             stock_in_warehouse=sales.stock_in_warehouse,
@@ -508,16 +537,21 @@ def _build_key_states(
             is_hot_style=sales.is_hot_style,
             stock_in_warehouse=sales.stock_in_warehouse,
         )
-        available_stock = (
-            sales.stock_in_warehouse + sales.pending_receive + shipping_in_progress
-        )
-        raw_gap = max(
+        forecast_gap = max(
             0.0,
             forecast_metrics.forecast_stocking_period_sales - available_stock,
         )
         if sales.is_hot_style:
-            raw_gap *= HOT_STYLE_GAP_MULTIPLIER
-        raw_gap *= global_gap_multiplier
+            forecast_gap *= HOT_STYLE_GAP_MULTIPLIER
+        forecast_gap *= global_gap_multiplier
+        base_stock_gap_raw = _base_stock_gap(
+            base_stock_qty=base_stock_qty,
+            available_stock=available_stock,
+        )
+        base_stock_triggered = (
+            base_stock_gap_raw > 0 and base_stock_gap_raw >= forecast_gap
+        )
+        raw_gap = max(forecast_gap, base_stock_gap_raw)
         gap = math.ceil(raw_gap)
         recommended_qty_total = min(order_qty_total, gap)
         states[key] = KeyState(
@@ -528,9 +562,18 @@ def _build_key_states(
             gap=gap,
             recommended_qty_total=recommended_qty_total,
             forecast_metrics=forecast_metrics,
-            min_order_ship_qty_exempt_eligible=False,
+            min_order_ship_qty_exempt_eligible=base_stock_triggered,
+            base_stock_qty=base_stock_qty,
+            base_stock_gap=math.ceil(base_stock_gap_raw),
+            base_stock_triggered=base_stock_triggered,
         )
     return states
+
+
+def _base_stock_gap(*, base_stock_qty: int, available_stock: float) -> float:
+    if base_stock_qty <= 0:
+        return 0.0
+    return max(0.0, float(base_stock_qty) - available_stock)
 
 
 def compute_forecast_metrics(

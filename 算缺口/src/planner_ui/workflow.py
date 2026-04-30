@@ -86,6 +86,7 @@ def run_planner(
     sales_path: str | Path,
     output_dir: str | Path,
     global_gap_multiplier: float,
+    base_stock_qty: int,
     temu_sales_path: str | Path,
 ) -> PlannerRunResult:
     orders = Path(orders_path)
@@ -126,6 +127,8 @@ def run_planner(
         str(constraints_path),
         "--global-gap-multiplier",
         str(global_gap_multiplier),
+        "--base-stock-qty",
+        str(base_stock_qty),
         "--temu-sales",
         str(temu_sales),
     ]
@@ -214,6 +217,9 @@ def _build_localized_console_output(
     service_level_summary = summary_value("服务水平分布")
     forecast_model_summary = summary_value("预测模型分布")
     global_gap_multiplier = summary_value("全局缺口上浮系数")
+    base_stock_qty = summary_value("保底库存目标")
+    base_stock_triggered_skus = summary_value("保底触发SKU数")
+    base_stock_triggered_lines = summary_value("保底触发订单行数")
     min_order_ship_qty = summary_value("最小发货阈值")
     low_qty_orders_before_exempt = summary_value("阈值前低发货量订单数")
     low_qty_orders = summary_value("低于阈值订单数_提示")
@@ -239,6 +245,8 @@ def _build_localized_console_output(
         f"服务水平分布：{service_level_summary}",
         f"预测模型分布：{forecast_model_summary}",
         f"全局缺口倍率：{global_gap_multiplier}",
+        f"保底库存目标：{base_stock_qty}",
+        f"保底触发：{base_stock_triggered_skus} 个SKU，{base_stock_triggered_lines} 行",
         f"最小发货阈值：{min_order_ship_qty}",
         f"阈值前低发货量订单数：{low_qty_orders_before_exempt}",
         f"低发货量豁免订单数：{low_qty_orders_exempted}",

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 from .constraints import DEFAULT_CONSTRAINTS_FILENAME, load_constraints
-from .engine import build_recommendations
+from .engine import DEFAULT_BASE_STOCK_QTY, build_recommendations
 from .eval_forecast import (
     DEFAULT_HOLDOUT_DAYS,
     DEFAULT_MIN_TRAIN_DAYS,
@@ -70,6 +70,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Global multiplier applied to key gaps after hot-style rule (default: 1.0)",
+    )
+    parser.add_argument(
+        "--base-stock-qty",
+        type=int,
+        default=DEFAULT_BASE_STOCK_QTY,
+        help=(
+            "Minimum available stock target per matched SKU. "
+            f"Use 0 to disable (default: {DEFAULT_BASE_STOCK_QTY})"
+        ),
     )
     parser.add_argument(
         "--eval-holdout-days",
@@ -164,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         strict=(args.constraints is not None),
     )
     global_gap_multiplier = args.global_gap_multiplier
+    base_stock_qty = args.base_stock_qty
 
     recommendations, quality_rows, summary = build_recommendations(
         order_lines,
@@ -174,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         exclude_skuid=exclude_skuid,
         shipping_in_progress_by_key=shipping_in_progress_by_key,
         global_gap_multiplier=global_gap_multiplier,
+        base_stock_qty=base_stock_qty,
         daily_sales_by_key=daily_sales_by_key,
     )
     eval_rows, _eval_skipped, eval_summary = run_holdout_eval(
@@ -317,6 +328,9 @@ def _print_run_summary(
     print(f"Service levels: {summary['service_level_summary']}")
     print(f"Forecast models: {summary['forecast_model_summary']}")
     print(f"Global gap multiplier: {summary['global_gap_multiplier']}")
+    print(f"Base stock qty: {summary['base_stock_qty']}")
+    print(f"Base stock triggered SKUs: {summary['base_stock_triggered_skus']}")
+    print(f"Base stock triggered lines: {summary['base_stock_triggered_lines']}")
     print(f"Min order ship qty threshold: {summary['min_order_ship_qty_threshold']}")
     print(f"Low-qty orders before exemption: {summary['low_qty_orders_before_exempt']}")
     print(f"Low-qty orders exempted: {summary['low_qty_orders_exempted']}")
