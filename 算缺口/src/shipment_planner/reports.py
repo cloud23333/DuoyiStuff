@@ -7,7 +7,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.drawing.image import Image as XlsxImage
+from openpyxl.formatting.rule import CellIsRule, FormulaRule
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .engine import stockout_mask_cut
@@ -15,48 +18,51 @@ from .eval_forecast import EvalRow
 from .forecast_curve import build_forecast_curve
 
 RECOMMENDATION_FIELDS = [
-    ("internal_order_id", "内部订单号"),
+    ("internal_order_id", "订单号"),
+    ("__item_identity__", "商品定位"),
+    ("line_order_qty", "订单行数量"),
+    ("recommended_ship", "建议发货量"),
+    ("decision_reason", "SKU建议"),
+    ("order_decision_reason", "订单建议"),
+    ("__action_notes__", "处理提示"),
     ("店铺款式编码", "店铺款式编码"),
     ("店铺商品编码", "店铺商品编码"),
-    ("原始商品编码", "原始商品编码"),
-    ("系统商品编码", "系统商品编码"),
-    ("sku_code_check", "SKU编码校验"),
-    ("line_order_qty", "订单行数量"),
-    ("key_order_qty", "同SKC_SKUID总下单量"),
-    ("forecast_strategy", "预测策略"),
-    ("demand_profile", "需求类型"),
-    ("anomaly_flags", "异常标记"),
-    ("service_level", "服务水平"),
-    ("forecast_model", "预测模型"),
-    ("effective_daily_sales", "异常调整后日均销量"),
-    ("forecast_daily_sales", "预测日均销量"),
-    ("forecast_stocking_period_sales", "预测备货期销量"),
-    ("sku_forecast_abs_error", "SKU预测绝对误差"),
-    ("sku_forecast_signed_error", "SKU预测偏差"),
-    ("__plot__", "销量与预测曲线"),
-    ("stocking_days", "备货逻辑天数"),
-    ("wh", "平台仓内库存"),
-    ("pending_ship", "平台待发货库存"),
-    ("shipping_in_progress", "发货中数量"),
-    ("pending_recv", "平台待收货库存"),
+    ("原始商品编码", "订单商品编码"),
+    ("key_order_qty", "同款同SKU总下单量"),
+    ("key_recommended_total", "同款同SKU建议总量"),
     ("gap", "缺口"),
-    ("base_stock_qty", "保底库存目标"),
-    ("base_stock_gap", "保底库存缺口"),
-    ("base_stock_triggered_warning", "保底是否触发"),
-    ("key_recommended_total", "同SKC_SKUID建议总量"),
+    ("__available_stock__", "可用库存"),
+    ("wh", "平台仓内库存"),
+    ("pending_recv", "平台待收货库存"),
+    ("shipping_in_progress", "发货中数量"),
+    ("pending_ship", "平台待发货库存"),
+    ("forecast_stocking_period_sales", "预测备货期销量"),
+    ("forecast_daily_sales", "预测日均销量"),
+    ("effective_daily_sales", "异常调整后日均销量"),
+    ("stocking_days", "备货逻辑天数"),
     ("recommended_ship_before_small_change_rule", "30%规则前建议发货量"),
     ("small_change_ratio_before_rule", "30%规则前变动比例"),
     ("small_change_keep_warning", "30%内免改数量提示"),
-    ("recommended_ship", "建议发货量"),
-    ("decision_reason", "SKU建议类型"),
-    ("order_decision_reason", "订单建议类型"),
-    ("intercept_reason", "拦截原因"),
-    ("order_intercept_warning", "订单拦截导致不发提示"),
     ("order_recommended_ship_total_before_threshold", "订单阈值前建议总量"),
     ("min_order_ship_qty_threshold", "最小发货阈值"),
     ("order_low_qty_warning", "订单低于起发量提示"),
     ("min_order_ship_qty_exempt_warning", "小于10不发豁免资格提示"),
     ("min_order_ship_qty_exempt_applied_warning", "小于10不发豁免生效提示"),
+    ("forecast_strategy", "预测策略"),
+    ("demand_profile", "需求类型"),
+    ("anomaly_flags", "异常标记"),
+    ("service_level", "服务水平"),
+    ("forecast_model", "预测模型"),
+    ("sku_forecast_abs_error", "SKU预测绝对误差"),
+    ("sku_forecast_signed_error", "SKU预测偏差"),
+    ("__plot__", "销量与预测曲线"),
+    ("系统商品编码", "系统商品编码"),
+    ("sku_code_check", "SKU编码校验"),
+    ("base_stock_qty", "保底库存目标"),
+    ("base_stock_gap", "保底库存缺口"),
+    ("base_stock_triggered_warning", "保底是否触发"),
+    ("intercept_reason", "拦截原因"),
+    ("order_intercept_warning", "订单拦截导致不发提示"),
 ]
 
 PLOT_COLUMN_NAME = "销量与预测曲线"
@@ -64,6 +70,71 @@ PLOT_COLUMN_WIDTH_CHARS = 46.0
 PLOT_ROW_HEIGHT_POINTS = 100.0
 PLOT_IMAGE_WIDTH_PX = 320
 PLOT_IMAGE_HEIGHT_PX = 128
+
+RECOMMENDATION_FREEZE_PANES = "E2"
+HEADER_ROW_HEIGHT_POINTS = 24.0
+DEFAULT_ROW_HEIGHT_POINTS = 34.0
+MIN_COLUMN_WIDTH_CHARS = 8.0
+MAX_COLUMN_WIDTH_CHARS = 34.0
+TEXT_WRAP_COLUMN_WIDTH_CHARS = 30.0
+
+HEADER_COMMENTS = {
+    "建议发货量": "最终建议执行数量，优先查看或复制此列。",
+    "商品定位": "合并显示店铺款式编码、店铺商品编码和订单商品编码，减少冻结列占用。",
+    "处理提示": "汇总影响建议量的主要原因和异常提示。",
+    "可用库存": "平台仓内库存 + 平台待收货库存 + 发货中数量。",
+    "缺口": "预测备货期需求扣减可用库存后的缺口。",
+}
+
+INTEGER_FORMAT = "#,##0"
+DECIMAL_FORMAT = "#,##0.####"
+PERCENT_FORMAT = "0%"
+
+PERCENT_FORMAT_FIELDS = {
+    "service_level",
+    "small_change_ratio_before_rule",
+}
+
+DECIMAL_FORMAT_FIELDS = {
+    "effective_daily_sales",
+    "forecast_daily_sales",
+    "forecast_stocking_period_sales",
+    "stocking_days",
+    "sku_forecast_abs_error",
+    "sku_forecast_signed_error",
+    "wh",
+    "pending_recv",
+    "shipping_in_progress",
+    "pending_ship",
+    "__available_stock__",
+}
+
+TEXT_WRAP_COLUMNS = {
+    "商品定位",
+    "处理提示",
+    "异常标记",
+}
+
+HEADER_GROUP_FILLS = {
+    "action": PatternFill("solid", fgColor="1F4E78"),
+    "stock": PatternFill("solid", fgColor="5B7F55"),
+    "rule": PatternFill("solid", fgColor="8064A2"),
+    "forecast": PatternFill("solid", fgColor="4F81BD"),
+    "diagnostic": PatternFill("solid", fgColor="7F6000"),
+}
+HEADER_FONT = Font(color="FFFFFF", bold=True)
+GRID_BORDER = Border(
+    left=Side(style="thin", color="D9E2F3"),
+    right=Side(style="thin", color="D9E2F3"),
+    top=Side(style="thin", color="D9E2F3"),
+    bottom=Side(style="thin", color="D9E2F3"),
+)
+ACTION_FILL = PatternFill("solid", fgColor="FFF2CC")
+ACTION_STRONG_FILL = PatternFill("solid", fgColor="FCE4D6")
+MUTED_FILL = PatternFill("solid", fgColor="F2F2F2")
+WARNING_FILL = PatternFill("solid", fgColor="FCE4D6")
+INFO_FILL = PatternFill("solid", fgColor="E2F0D9")
+MUTED_FONT = Font(color="808080")
 
 QUALITY_FIELDS = [
     ("type", "问题类型"),
@@ -353,7 +424,8 @@ def _write_recommendations_xlsx(
     recommendation_rows: list[dict[str, object]],
     plot_cache: dict[tuple[str, str], bytes],
 ) -> None:
-    columns = [target for _, target in RECOMMENDATION_FIELDS]
+    fields = RECOMMENDATION_FIELDS
+    columns = [target for _, target in fields]
     plot_col_idx = columns.index(PLOT_COLUMN_NAME) + 1
     plot_col_letter = get_column_letter(plot_col_idx)
 
@@ -386,7 +458,225 @@ def _write_recommendations_xlsx(
             worksheet.add_image(excel_image)
             worksheet.row_dimensions[excel_row].height = PLOT_ROW_HEIGHT_POINTS
 
+    _style_recommendations_worksheet(worksheet=worksheet, fields=fields)
     workbook.save(path)
+
+
+def _style_recommendations_worksheet(
+    *,
+    worksheet,
+    fields: Sequence[tuple[str, str]],
+) -> None:
+    max_row = worksheet.max_row
+    max_col = len(fields)
+    last_col_letter = get_column_letter(max_col)
+    worksheet.freeze_panes = RECOMMENDATION_FREEZE_PANES
+    worksheet.auto_filter.ref = f"A1:{last_col_letter}{max_row}"
+    worksheet.sheet_view.showGridLines = False
+    worksheet.sheet_format.defaultRowHeight = DEFAULT_ROW_HEIGHT_POINTS
+    worksheet.row_dimensions[1].height = HEADER_ROW_HEIGHT_POINTS
+
+    for col_idx, (source, name) in enumerate(fields, start=1):
+        header = worksheet.cell(row=1, column=col_idx)
+        header.fill = _header_fill_for_source(source)
+        header.font = HEADER_FONT
+        header.border = GRID_BORDER
+        header.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        if name in HEADER_COMMENTS:
+            header.comment = Comment(HEADER_COMMENTS[name], "shipment-planner")
+
+    for row_idx in range(2, max_row + 1):
+        for col_idx, (source, name) in enumerate(fields, start=1):
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            cell.alignment = _cell_alignment(source, name)
+            cell.border = GRID_BORDER
+            if source in INT_FORMAT_FIELDS:
+                cell.number_format = INTEGER_FORMAT
+            elif source in PERCENT_FORMAT_FIELDS:
+                cell.number_format = PERCENT_FORMAT
+            elif source in DECIMAL_FORMAT_FIELDS:
+                cell.number_format = DECIMAL_FORMAT
+
+    _apply_column_widths(worksheet, fields)
+    _apply_recommendation_conditional_formatting(worksheet, fields)
+
+
+def _header_fill_for_source(source: str) -> PatternFill:
+    if source in {
+        "internal_order_id",
+        "__item_identity__",
+        "店铺款式编码",
+        "店铺商品编码",
+        "原始商品编码",
+        "line_order_qty",
+        "recommended_ship",
+        "decision_reason",
+        "order_decision_reason",
+        "__action_notes__",
+    }:
+        return HEADER_GROUP_FILLS["action"]
+    if source in {
+        "key_order_qty",
+        "key_recommended_total",
+        "gap",
+        "__available_stock__",
+        "wh",
+        "pending_recv",
+        "shipping_in_progress",
+        "pending_ship",
+    }:
+        return HEADER_GROUP_FILLS["stock"]
+    if source in {
+        "recommended_ship_before_small_change_rule",
+        "small_change_ratio_before_rule",
+        "small_change_keep_warning",
+        "order_recommended_ship_total_before_threshold",
+        "min_order_ship_qty_threshold",
+        "order_low_qty_warning",
+        "min_order_ship_qty_exempt_warning",
+        "min_order_ship_qty_exempt_applied_warning",
+    }:
+        return HEADER_GROUP_FILLS["rule"]
+    if source in {
+        "forecast_stocking_period_sales",
+        "forecast_daily_sales",
+        "effective_daily_sales",
+        "stocking_days",
+        "forecast_strategy",
+        "demand_profile",
+        "anomaly_flags",
+        "service_level",
+        "forecast_model",
+        "sku_forecast_abs_error",
+        "sku_forecast_signed_error",
+        "__plot__",
+    }:
+        return HEADER_GROUP_FILLS["forecast"]
+    return HEADER_GROUP_FILLS["diagnostic"]
+
+
+def _cell_alignment(source: str, name: str) -> Alignment:
+    return Alignment(
+        horizontal="center",
+        vertical="center",
+        wrap_text=name in TEXT_WRAP_COLUMNS,
+    )
+
+
+def _apply_column_widths(
+    worksheet,
+    fields: Sequence[tuple[str, str]],
+) -> None:
+    for col_idx, (source, name) in enumerate(fields, start=1):
+        letter = get_column_letter(col_idx)
+        if name == PLOT_COLUMN_NAME:
+            worksheet.column_dimensions[letter].width = PLOT_COLUMN_WIDTH_CHARS
+            continue
+        width = _recommended_column_width(worksheet, col_idx, source, name)
+        worksheet.column_dimensions[letter].width = width
+
+
+def _recommended_column_width(
+    worksheet,
+    col_idx: int,
+    source: str,
+    name: str,
+) -> float:
+    if name in TEXT_WRAP_COLUMNS:
+        return 24.0 if source == "__item_identity__" else TEXT_WRAP_COLUMN_WIDTH_CHARS
+    if source == "internal_order_id":
+        return 13.0
+    if source in {"店铺款式编码", "店铺商品编码"}:
+        return 15.0
+    if source in {"原始商品编码", "系统商品编码"}:
+        return 16.0
+    if source in {"decision_reason", "order_decision_reason"}:
+        return 8.0
+    if source == "line_order_qty":
+        return 10.0
+    if source == "recommended_ship":
+        return 11.0
+
+    max_width = _display_width(name)
+    for row_idx in range(2, worksheet.max_row + 1):
+        max_width = max(
+            max_width,
+            _display_width(worksheet.cell(row=row_idx, column=col_idx).value),
+        )
+    return min(max(max_width + 2, MIN_COLUMN_WIDTH_CHARS), MAX_COLUMN_WIDTH_CHARS)
+
+
+def _display_width(value: object) -> int:
+    if value is None:
+        return 0
+    text = str(value)
+    return sum(2 if ord(char) > 127 else 1 for char in text)
+
+
+def _apply_recommendation_conditional_formatting(
+    worksheet,
+    fields: Sequence[tuple[str, str]],
+) -> None:
+    if worksheet.max_row < 2:
+        return
+
+    columns = {name: get_column_letter(idx) for idx, (_, name) in enumerate(fields, start=1)}
+    last_row = worksheet.max_row
+
+    recommended_col = columns["建议发货量"]
+    worksheet.conditional_formatting.add(
+        f"{recommended_col}2:{recommended_col}{last_row}",
+        CellIsRule(
+            operator="greaterThan",
+            formula=["0"],
+            fill=ACTION_FILL,
+            font=Font(bold=True, color="9C6500"),
+        ),
+    )
+    worksheet.conditional_formatting.add(
+        f"{recommended_col}2:{recommended_col}{last_row}",
+        CellIsRule(
+            operator="equal",
+            formula=["0"],
+            fill=MUTED_FILL,
+            font=MUTED_FONT,
+        ),
+    )
+
+    notes_col = columns["处理提示"]
+    worksheet.conditional_formatting.add(
+        f"{notes_col}2:{notes_col}{last_row}",
+        FormulaRule(formula=[f"LEN(TRIM(${notes_col}2))>0"], fill=WARNING_FILL),
+    )
+
+    for name in (
+        "30%内免改数量提示",
+        "订单低于起发量提示",
+        "小于10不发豁免资格提示",
+        "小于10不发豁免生效提示",
+        "保底是否触发",
+        "订单拦截导致不发提示",
+    ):
+        col = columns[name]
+        worksheet.conditional_formatting.add(
+            f"{col}2:{col}{last_row}",
+            FormulaRule(formula=[f'${col}2="是"'], fill=INFO_FILL),
+        )
+
+    check_col = columns["SKU编码校验"]
+    worksheet.conditional_formatting.add(
+        f"{check_col}2:{check_col}{last_row}",
+        FormulaRule(
+            formula=[f'OR(${check_col}2="不一致",${check_col}2="缺少销售匹配")'],
+            fill=WARNING_FILL,
+        ),
+    )
+
+    intercept_col = columns["拦截原因"]
+    worksheet.conditional_formatting.add(
+        f"{intercept_col}2:{intercept_col}{last_row}",
+        FormulaRule(formula=[f"LEN(TRIM(${intercept_col}2))>0"], fill=ACTION_STRONG_FILL),
+    )
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) -> None:
@@ -403,6 +693,7 @@ def _localize_recommendation_row(row: dict[str, object]) -> dict[str, object]:
         fields=RECOMMENDATION_FIELDS,
         default_value="",
         value_mapper=_localize_recommendation_value,
+        derived_value_mapper=_recommendation_derived_value,
     )
 
 
@@ -421,14 +712,84 @@ def _localize_row(
     fields: Sequence[tuple[str, str]],
     default_value: object,
     value_mapper: Callable[[str, object], object],
+    derived_value_mapper: Callable[[str, dict[str, object]], object] | None = None,
 ) -> dict[str, object]:
     localized: dict[str, object] = {}
     for source, target in fields:
         if source == "__plot__":
             localized[target] = ""
             continue
+        if source.startswith("__") and derived_value_mapper is not None:
+            localized[target] = derived_value_mapper(source, row)
+            continue
         localized[target] = value_mapper(source, row.get(source, default_value))
     return localized
+
+
+def _recommendation_derived_value(source: str, row: dict[str, object]) -> object:
+    if source == "__item_identity__":
+        return _build_item_identity(row)
+    if source == "__action_notes__":
+        return _build_action_notes(row)
+    if source == "__available_stock__":
+        return _format_int_like(
+            round(
+                _as_float(row.get("wh"))
+                + _as_float(row.get("pending_recv"))
+                + _as_float(row.get("shipping_in_progress")),
+                4,
+            )
+        )
+    return ""
+
+
+def _build_item_identity(row: dict[str, object]) -> str:
+    skc = str(row.get("店铺款式编码", "")).strip()
+    skuid = str(row.get("店铺商品编码", "")).strip()
+    order_sku = str(row.get("原始商品编码", "")).strip()
+    parts = [
+        f"SKC {skc}" if skc else "",
+        f"SKUID {skuid}" if skuid else "",
+        f"SKU {order_sku}" if order_sku else "",
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def _build_action_notes(row: dict[str, object]) -> str:
+    notes: list[str] = []
+
+    sku_code_check = str(row.get("sku_code_check", "")).strip()
+    if sku_code_check == "diff":
+        notes.append("SKU不一致")
+    elif sku_code_check == "missing_key":
+        notes.append("缺少销售匹配")
+
+    intercept_reason = str(row.get("intercept_reason", "")).strip()
+    if intercept_reason:
+        notes.append(str(INTERCEPT_REASON_MAP.get(intercept_reason, intercept_reason)))
+
+    if _is_yes(row.get("order_intercept_warning")):
+        notes.append("订单拦截导致不发")
+    if _is_yes(row.get("order_low_qty_warning")):
+        notes.append("订单低于起发量")
+    if _is_yes(row.get("min_order_ship_qty_exempt_applied_warning")):
+        notes.append("小于10豁免生效")
+    elif _is_yes(row.get("min_order_ship_qty_exempt_warning")):
+        notes.append("小于10豁免候选")
+    if _is_yes(row.get("small_change_keep_warning")):
+        notes.append("30%内免改")
+    if _is_yes(row.get("base_stock_triggered_warning")):
+        notes.append("保底触发")
+
+    anomaly_flags = str(row.get("anomaly_flags", "")).strip()
+    if anomaly_flags and anomaly_flags != "无":
+        notes.append(f"销量异常：{anomaly_flags}")
+
+    return "；".join(notes)
+
+
+def _is_yes(value: object) -> bool:
+    return str(value).strip() in {"yes", "是"}
 
 
 def _localize_summary(
