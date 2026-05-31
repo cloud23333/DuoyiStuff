@@ -149,8 +149,14 @@ def hurdle_distribution(
     positives = [value for value in base if value > 0]
     if not positives:
         return DemandDistribution(horizon=horizon, mean=0.0, variance=0.0)
-    size = weighted_mean(positives, _LONG_HALF_LIFE)
-    size_var = weighted_variance(positives, _LONG_HALF_LIFE, mean=size)
+    # Level from the spike-robust series so a one-off spike doesn't inflate the
+    # mean; dispersion still comes from the RAW positives so the spike widens
+    # the interval instead.
+    cleaned, _ = clean_isolated_spikes(base)
+    cleaned_positives = [value for value in cleaned if value > 0] or positives
+    size = weighted_mean(cleaned_positives, _LONG_HALF_LIFE)
+    raw_size = weighted_mean(positives, _LONG_HALF_LIFE)
+    size_var = weighted_variance(positives, _LONG_HALF_LIFE, mean=raw_size)
     if recent_drop:
         occurrence = min(occurrence, recent_mean(indicators, days=_RECENT_DAYS))
         size = min(size, recent_mean(base, days=_RECENT_DAYS) or size)
