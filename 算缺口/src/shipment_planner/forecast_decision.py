@@ -9,7 +9,7 @@ SERVICE_LEVEL_FLOOR = 0.50
 SERVICE_LEVEL_CEIL = 0.95
 SL_DEATH = 0.50
 SL_BASE = 0.55
-SL_HOT = 0.70
+SL_HOT = 0.60
 
 
 def resolve_service_level(
