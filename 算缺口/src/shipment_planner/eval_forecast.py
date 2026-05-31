@@ -259,9 +259,14 @@ def _evaluate(
             apply_stockout_mask=apply_stockout_mask,
         )
 
-        forecast_holdout_total = metrics.forecast_daily_sales * holdout_days
+        # predictive_mean is already over the holdout horizon since
+        # stocking_days=holdout_days, so it is the unbiased holdout total.
+        forecast_holdout_total = metrics.predictive_mean
         actual_total = int(sum(test))
         signed_error = forecast_holdout_total - actual_total
+        forecast_daily_sales = (
+            metrics.predictive_mean / holdout_days if holdout_days > 0 else 0.0
+        )
 
         rows.append(
             EvalRow(
@@ -270,7 +275,7 @@ def _evaluate(
                 strategy=metrics.strategy,
                 train_days=len(train),
                 holdout_days=holdout_days,
-                forecast_daily_sales=_round(metrics.forecast_daily_sales),
+                forecast_daily_sales=_round(forecast_daily_sales),
                 forecast_holdout_total=_round(forecast_holdout_total),
                 actual_holdout_total=actual_total,
                 abs_error=_round(abs(signed_error)),

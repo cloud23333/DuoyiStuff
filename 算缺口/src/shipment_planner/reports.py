@@ -251,7 +251,7 @@ SUMMARY_FIELDS = [
     ("anomaly_flag_summary", "异常标记分布"),
     ("service_level_summary", "服务水平分布"),
     ("forecast_model_summary", "预测模型分布"),
-    ("global_gap_multiplier", "全局缺口上浮系数"),
+    ("全局服务水平偏移", "全局服务水平偏移"),
     ("base_stock_qty", "保底库存目标"),
     ("base_stock_triggered_skus", "保底触发SKU数"),
     ("base_stock_triggered_lines", "保底触发订单行数"),
