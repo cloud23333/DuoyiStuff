@@ -66,10 +66,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--global-gap-multiplier",
+        "--service-level-offset",
         type=float,
-        default=1.0,
-        help="Global multiplier applied to key gaps after hot-style rule (default: 1.0)",
+        default=0.0,
+        help="全局服务水平偏移，建议范围 [-0.3, 0.3]",
     )
     parser.add_argument(
         "--base-stock-qty",
@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         constraints_path,
         strict=(args.constraints is not None),
     )
-    global_gap_multiplier = args.global_gap_multiplier
+    service_level_offset = args.service_level_offset
     base_stock_qty = args.base_stock_qty
 
     recommendations, quality_rows, summary = build_recommendations(
@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         exclude_skc=exclude_skc,
         exclude_skuid=exclude_skuid,
         shipping_in_progress_by_key=shipping_in_progress_by_key,
-        global_gap_multiplier=global_gap_multiplier,
+        service_level_offset=service_level_offset,
         base_stock_qty=base_stock_qty,
         daily_sales_by_key=daily_sales_by_key,
     )
@@ -327,7 +327,7 @@ def _print_run_summary(
     print(f"Anomaly flags: {summary['anomaly_flag_summary']}")
     print(f"Service levels: {summary['service_level_summary']}")
     print(f"Forecast models: {summary['forecast_model_summary']}")
-    print(f"Global gap multiplier: {summary['global_gap_multiplier']}")
+    print(f"Service level offset: {summary['全局服务水平偏移']}")
     print(f"Base stock qty: {summary['base_stock_qty']}")
     print(f"Base stock triggered SKUs: {summary['base_stock_triggered_skus']}")
     print(f"Base stock triggered lines: {summary['base_stock_triggered_lines']}")
