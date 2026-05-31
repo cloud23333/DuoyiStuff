@@ -34,8 +34,6 @@ from .post_processing import (
 )
 from .summary import build_summary
 
-HOT_STYLE_GAP_MULTIPLIER = 1.2
-DEFAULT_GLOBAL_GAP_MULTIPLIER = 1.0
 DEFAULT_BASE_STOCK_QTY = 2
 # Set by the bake-off (Task 7). One of: negbin_ewma / poisson_ewma / hurdle.
 SELECTED_ESTIMATOR = "hurdle"
@@ -91,12 +89,10 @@ def build_recommendations(
     exclude_skc: set[str] | None = None,
     exclude_skuid: set[str] | None = None,
     shipping_in_progress_by_key: dict[tuple[str, str], int] | None = None,
-    global_gap_multiplier: float = DEFAULT_GLOBAL_GAP_MULTIPLIER,
+    service_level_offset: float = 0.0,
     base_stock_qty: int = DEFAULT_BASE_STOCK_QTY,
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
-    if global_gap_multiplier <= 0:
-        raise ValueError("global_gap_multiplier must be greater than 0.")
     if base_stock_qty < 0:
         raise ValueError("base_stock_qty must be greater than or equal to 0.")
 
@@ -114,7 +110,7 @@ def build_recommendations(
         daily_sales_by_key=daily_sales_by_key or {},
         missing_daily_sales_keys=missing_daily_sales_keys,
         shipping_in_progress_by_key=shipping_in_progress_lookup,
-        global_gap_multiplier=global_gap_multiplier,
+        service_level_offset=service_level_offset,
         base_stock_qty=base_stock_qty,
     )
     suggested_by_row, sku_order_limit_capped_rows = (
@@ -286,7 +282,7 @@ def build_recommendations(
         intercepted_order_lines=intercepted_order_lines,
         intercepted_orders=intercept_stats.get("intercepted_orders", 0),
         small_change_kept_lines=small_change_stats.get("small_change_kept_lines", 0),
-        global_gap_multiplier=global_gap_multiplier,
+        service_level_offset=service_level_offset,
         base_stock_qty=base_stock_qty,
     )
     return recommendations, quality_rows, summary
@@ -498,7 +494,7 @@ def _build_key_states(
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
     missing_daily_sales_keys: set[tuple[str, str]],
     shipping_in_progress_by_key: dict[tuple[str, str], int],
-    global_gap_multiplier: float,
+    service_level_offset: float,
     base_stock_qty: int,
 ) -> dict[tuple[str, str], KeyState]:
     states: dict[tuple[str, str], KeyState] = {}
@@ -549,14 +545,12 @@ def _build_key_states(
             stocking_days=sales.stocking_days,
             is_hot_style=sales.is_hot_style,
             stock_in_warehouse=sales.stock_in_warehouse,
+            service_level_offset=service_level_offset,
         )
         forecast_gap = max(
             0.0,
             forecast_metrics.forecast_stocking_period_sales - available_stock,
         )
-        if sales.is_hot_style:
-            forecast_gap *= HOT_STYLE_GAP_MULTIPLIER
-        forecast_gap *= global_gap_multiplier
         base_stock_gap_raw = _base_stock_gap(
             base_stock_qty=base_stock_qty,
             available_stock=available_stock,
