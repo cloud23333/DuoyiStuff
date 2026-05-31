@@ -1,6 +1,6 @@
 # 预测算法迭代路线图
 
-本文档记录日销预测模型的后续可迭代方向，按"成本低→收益稳→工程量大"分四个阶段。阶段 1 已于 2026-04-20 落地（EWMA 替换固定窗口 + 策略双重确认 + 阈值常量化）。
+本文档记录日销预测模型的后续可迭代方向，按"成本低→收益稳→工程量大"分四个阶段。阶段 1 已于 2026-04-20 落地（EWMA 替换固定窗口 + 策略双重确认 + 阈值常量化）。阶段 3 已于 2026-06-01 落地（重构为「预测分布 → 分位数决策」两层：pure-stdlib NegBin/Poisson 逆 CDF + negbin/poisson/hurdle EWMA 估计器，holdout bake-off 选定 hurdle；`service_level` 单参数替代离散策略并吸收热销/全局乘子；`--global-gap-multiplier` 改为 `--service-level-offset`）。详见 `docs/superpowers/specs/2026-05-31-distribution-quantile-forecast-design.md`。
 
 ---
 
@@ -50,9 +50,9 @@
 
 ---
 
-## 阶段 3：点估计 → 分布决策（高成本，1–2 周）
+## 阶段 3：点估计 → 分布决策（高成本，1–2 周）✅ 已落地（2026-06-01）
 
-把"预测日均 × 备货天数"升级成真正的库存决策。
+把"预测日均 × 备货天数"升级成真正的库存决策。落地实现见 `forecast_distribution.py` / `forecast_decision.py` / `forecast_level.py` 与 `forecast_bakeoff.py`。以下为原始设计条目（均已实现）。
 
 ### 3.1 输出预测分布
 - 用 Poisson 或 NegBin 拟合日销序列
