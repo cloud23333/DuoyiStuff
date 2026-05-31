@@ -37,7 +37,7 @@ def test_offset_is_clamped():
     ) == pytest.approx(0.95)
     assert resolve_service_level(
         is_hot_style=False, recent_drop=True, sustained_rise=False, offset=-0.9
-    ) == pytest.approx(0.50)
+    ) == pytest.approx(0.40)  # clamped to SERVICE_LEVEL_FLOOR
 
 
 def test_gap_subtracts_stock_and_ceils():

@@ -5,11 +5,11 @@ import math
 
 from .forecast_distribution import DemandDistribution
 
-SERVICE_LEVEL_FLOOR = 0.50
+SERVICE_LEVEL_FLOOR = 0.40
 SERVICE_LEVEL_CEIL = 0.95
 SL_DEATH = 0.50
-SL_BASE = 0.55
-SL_HOT = 0.60
+SL_BASE = 0.40
+SL_HOT = 0.50
 
 
 def resolve_service_level(
