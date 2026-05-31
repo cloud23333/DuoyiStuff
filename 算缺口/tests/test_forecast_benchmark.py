@@ -79,6 +79,7 @@ def test_holdout_eval_forecasts_the_holdout_horizon(monkeypatch):
             strategy="test",
             forecast_daily_sales=1.0,
             forecast_stocking_period_sales=kwargs["stocking_days"],
+            predictive_mean=kwargs["stocking_days"],
         )
 
     monkeypatch.setattr(

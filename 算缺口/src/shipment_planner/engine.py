@@ -7,12 +7,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .allocation import allocate_recommendation_quantities
-from .forecast_models import (
-    MODEL_CURRENT,
-    MODEL_IMAPA,
-    MODEL_TSB,
-    forecast_candidate_model,
+from .forecast_decision import resolve_service_level
+from .forecast_distribution import (
+    hurdle_distribution,
+    negbin_ewma_distribution,
+    poisson_ewma_distribution,
 )
+from .forecast_level import (
+    clean_isolated_spikes,
+    has_recent_drop,
+    has_sustained_rise,
+)
+from .forecast_models import MODEL_CURRENT
 from .models import ForecastMetrics, KeyState, OrderLine, SalesRecord
 from .parsers import normalize_sku_code
 from .post_processing import (
@@ -28,9 +34,9 @@ from .post_processing import (
 )
 from .summary import build_summary
 
-HOT_STYLE_GAP_MULTIPLIER = 1.2
-DEFAULT_GLOBAL_GAP_MULTIPLIER = 1.0
 DEFAULT_BASE_STOCK_QTY = 2
+# Set by the bake-off (Task 7). One of: negbin_ewma / poisson_ewma / hurdle.
+SELECTED_ESTIMATOR = "hurdle"
 SMALL_CHANGE_KEEP_RATIO = 0.3
 FORECAST_STRATEGY_CONSERVATIVE = "保守"
 FORECAST_STRATEGY_NORMAL = "正常"
@@ -49,31 +55,22 @@ ANOMALY_RECENT_DROP = "连续暴跌"
 ANOMALY_SINGLE_DAY_BIG_ORDER = "单日大单"
 ANOMALY_STOCKOUT_TAIL = "疑似缺货尾部"
 
-# Forecast tuning — EWMA half-lives replace fixed recent-N windows so the
-# trend signal degrades gracefully on short histories and avoids hard cutoffs.
-EWMA_SHORT_HALF_LIFE = 2.0
-EWMA_LONG_HALF_LIFE = 5.0
-STRATEGY_DROP_RATIO = 0.6
-STRATEGY_RISE_RATIO = 1.5
-STRATEGY_VOLATILITY_THRESHOLD = 1.2
-ISOLATED_SPIKE_MULTIPLIER = 3.0
-ISOLATED_SPIKE_MIN_QTY = 10.0
-ISOLATED_SPIKE_CONTEXT_DAYS = 5
+# Single-day big-order detection thresholds (used by _adjust_single_day_big_order).
 SINGLE_DAY_BIG_ORDER_MIN_QTY = 10.0
 SINGLE_DAY_BIG_ORDER_SHARE = 0.70
 SINGLE_DAY_BIG_ORDER_PEER_MULTIPLIER = 5.0
 SINGLE_DAY_BIG_ORDER_MIN_SMALL_SALE_DAYS = 2
-RECENT_DROP_DAYS = 5
-RECENT_DROP_RATIO = 0.45
+# Demand-profile classification thresholds (used by _demand_profile).
 INTERMITTENT_ZERO_RATIO = 0.5
 STABLE_VOLATILITY_THRESHOLD = 0.8
-
-SERVICE_LEVEL_NO_SALES = 0.50
+# Service level used by the single-day big-order base-stock fallback.
 SERVICE_LEVEL_CONSERVATIVE = 0.60
-SERVICE_LEVEL_INTERMITTENT = 0.65
-SERVICE_LEVEL_VOLATILE = 0.70
-SERVICE_LEVEL_NORMAL = 0.75
-SERVICE_LEVEL_AGGRESSIVE = 0.85
+
+_ESTIMATORS = {
+    "negbin_ewma": negbin_ewma_distribution,
+    "poisson_ewma": poisson_ewma_distribution,
+    "hurdle": hurdle_distribution,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,12 +89,10 @@ def build_recommendations(
     exclude_skc: set[str] | None = None,
     exclude_skuid: set[str] | None = None,
     shipping_in_progress_by_key: dict[tuple[str, str], int] | None = None,
-    global_gap_multiplier: float = DEFAULT_GLOBAL_GAP_MULTIPLIER,
+    service_level_offset: float = 0.0,
     base_stock_qty: int = DEFAULT_BASE_STOCK_QTY,
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
-    if global_gap_multiplier <= 0:
-        raise ValueError("global_gap_multiplier must be greater than 0.")
     if base_stock_qty < 0:
         raise ValueError("base_stock_qty must be greater than or equal to 0.")
 
@@ -115,7 +110,7 @@ def build_recommendations(
         daily_sales_by_key=daily_sales_by_key or {},
         missing_daily_sales_keys=missing_daily_sales_keys,
         shipping_in_progress_by_key=shipping_in_progress_lookup,
-        global_gap_multiplier=global_gap_multiplier,
+        service_level_offset=service_level_offset,
         base_stock_qty=base_stock_qty,
     )
     suggested_by_row, sku_order_limit_capped_rows = (
@@ -287,7 +282,7 @@ def build_recommendations(
         intercepted_order_lines=intercepted_order_lines,
         intercepted_orders=intercept_stats.get("intercepted_orders", 0),
         small_change_kept_lines=small_change_stats.get("small_change_kept_lines", 0),
-        global_gap_multiplier=global_gap_multiplier,
+        service_level_offset=service_level_offset,
         base_stock_qty=base_stock_qty,
     )
     return recommendations, quality_rows, summary
@@ -499,7 +494,7 @@ def _build_key_states(
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]],
     missing_daily_sales_keys: set[tuple[str, str]],
     shipping_in_progress_by_key: dict[tuple[str, str], int],
-    global_gap_multiplier: float,
+    service_level_offset: float,
     base_stock_qty: int,
 ) -> dict[tuple[str, str], KeyState]:
     states: dict[tuple[str, str], KeyState] = {}
@@ -550,14 +545,12 @@ def _build_key_states(
             stocking_days=sales.stocking_days,
             is_hot_style=sales.is_hot_style,
             stock_in_warehouse=sales.stock_in_warehouse,
+            service_level_offset=service_level_offset,
         )
         forecast_gap = max(
             0.0,
             forecast_metrics.forecast_stocking_period_sales - available_stock,
         )
-        if sales.is_hot_style:
-            forecast_gap *= HOT_STYLE_GAP_MULTIPLIER
-        forecast_gap *= global_gap_multiplier
         base_stock_gap_raw = _base_stock_gap(
             base_stock_qty=base_stock_qty,
             available_stock=available_stock,
@@ -694,6 +687,7 @@ def compute_forecast_metrics(
     is_hot_style: bool,
     stock_in_warehouse: float = 0.0,
     apply_stockout_mask: bool = True,
+    service_level_offset: float = 0.0,
 ) -> ForecastMetrics:
     """Public wrapper for the forecast pipeline (used by eval harness + engine)."""
     sales_explanation = _explain_daily_sales(
@@ -713,6 +707,7 @@ def compute_forecast_metrics(
         stock_in_warehouse=stock_in_warehouse,
         single_day_big_order=sales_explanation.single_day_big_order,
         stockout_tail=sales_explanation.stockout_tail,
+        service_level_offset=service_level_offset,
     )
 
 
@@ -749,23 +744,15 @@ def _forecast_metrics(
     stock_in_warehouse: float = 0.0,
     single_day_big_order: bool = False,
     stockout_tail: bool = False,
+    service_level_offset: float = 0.0,
 ) -> ForecastMetrics:
     values = [max(0.0, float(value)) for value in daily_sales]
-    cleaned_values, isolated_spike = _clean_isolated_spikes(values)
-    recent_drop = _has_recent_sales_drop(
-        values=cleaned_values,
-        stock_in_warehouse=stock_in_warehouse,
-    )
-
-    mean_daily = statistics.fmean(cleaned_values) if cleaned_values else 0.0
-    median_daily = float(statistics.median(cleaned_values)) if cleaned_values else 0.0
-    ewma_short = _ewma(cleaned_values, EWMA_SHORT_HALF_LIFE)
-    ewma_long = _ewma(cleaned_values, EWMA_LONG_HALF_LIFE)
-    trimmed_mean = _trimmed_mean(cleaned_values)
-    volatility = _volatility(cleaned_values, mean_daily)
+    cleaned_values, isolated_spike = clean_isolated_spikes(values)
+    recent_drop = has_recent_drop(values, stock_in_warehouse=stock_in_warehouse)
+    sustained_rise = has_sustained_rise(values)
     demand_profile = _demand_profile(
         values=cleaned_values,
-        volatility=volatility,
+        volatility=_simple_volatility(cleaned_values),
         isolated_spike=isolated_spike,
     )
     anomaly_flags = _anomaly_flags(
@@ -775,61 +762,33 @@ def _forecast_metrics(
         stockout_tail=stockout_tail,
     )
 
-    if demand_profile == DEMAND_PROFILE_NO_SALES:
-        strategy = FORECAST_STRATEGY_NO_SALES
-        effective_daily_sales = 0.0
-    elif demand_profile == DEMAND_PROFILE_INTERMITTENT:
-        strategy = FORECAST_STRATEGY_SLOW_MOVER
-        effective_daily_sales = _tsb_daily_sales(cleaned_values)
-    else:
-        strategy = _forecast_strategy(
-            median_daily=median_daily,
-            ewma_short=ewma_short,
-            ewma_long=ewma_long,
-            volatility=volatility,
-            isolated_spike=isolated_spike,
-            recent_drop=recent_drop,
-            is_hot_style=is_hot_style,
-        )
-        effective_daily_sales = _forecast_daily_sales(
-            strategy=strategy,
-            median_daily=median_daily,
-            ewma_short=ewma_short,
-            ewma_long=ewma_long,
-            trimmed_mean=trimmed_mean,
-        )
-    if recent_drop:
-        effective_daily_sales = min(
-            effective_daily_sales,
-            _recent_sales_average(cleaned_values, days=RECENT_DROP_DAYS),
-        )
-    service_level = _service_level(
-        demand_profile=demand_profile,
-        strategy=strategy,
+    horizon = max(1, math.ceil(stocking_days)) if stocking_days > 0 else 1
+    estimator = _ESTIMATORS[SELECTED_ESTIMATOR]
+    distribution = estimator(values, horizon=horizon, recent_drop=recent_drop)
+
+    service_level = resolve_service_level(
         is_hot_style=is_hot_style,
-        isolated_spike=isolated_spike,
         recent_drop=recent_drop,
+        sustained_rise=sustained_rise,
+        offset=service_level_offset,
     )
-    forecast_model = _select_forecast_model(
+    quantile_units = distribution.quantile(service_level)  # over `horizon` days
+    period_days = max(0.0, stocking_days)
+    # Rescale the horizon quantile/mean to the actual stocking period.
+    scale = (period_days / horizon) if horizon > 0 else 0.0
+    forecast_stocking_period_sales = quantile_units * scale
+    predictive_mean = distribution.mean * scale
+    forecast_daily_sales = (
+        forecast_stocking_period_sales / period_days if period_days > 0 else 0.0
+    )
+    effective_daily_sales = distribution.mean / horizon if horizon > 0 else 0.0
+
+    strategy = _derive_strategy_label(
         demand_profile=demand_profile,
         recent_drop=recent_drop,
+        sustained_rise=sustained_rise,
+        is_hot_style=is_hot_style,
     )
-    if forecast_model == MODEL_CURRENT:
-        forecast_daily_sales = _service_level_daily_sales(
-            effective_daily_sales=effective_daily_sales,
-            values=cleaned_values,
-            service_level=service_level,
-            demand_profile=demand_profile,
-            recent_drop=recent_drop,
-        )
-    else:
-        forecast_daily_sales = forecast_candidate_model(
-            forecast_model,
-            cleaned_values,
-            horizon_days=max(1, math.ceil(stocking_days)),
-        )
-        effective_daily_sales = forecast_daily_sales
-    forecast_stocking_period_sales = forecast_daily_sales * max(0.0, stocking_days)
     return ForecastMetrics(
         strategy=strategy,
         forecast_daily_sales=forecast_daily_sales,
@@ -837,154 +796,39 @@ def _forecast_metrics(
         demand_profile=demand_profile,
         anomaly_flags=anomaly_flags,
         service_level=service_level,
-        forecast_model=forecast_model,
+        forecast_model=SELECTED_ESTIMATOR,
         effective_daily_sales=effective_daily_sales,
+        predictive_mean=predictive_mean,
+        dispersion=distribution.variance,
+        chosen_quantile=service_level,
     )
 
 
-def _ewma(values: Sequence[float], half_life: float) -> float:
-    """Exponentially weighted moving average with a half-life decay.
-
-    Half-life H means a sample H days old contributes half as much as the
-    most recent one, with no hard cutoff — so short histories degrade
-    gracefully and single-day noise is smoothed.
-    """
-    if not values:
+def _simple_volatility(values: Sequence[float]) -> float:
+    if len(values) < 2:
         return 0.0
-    if half_life <= 0:
-        return float(values[-1])
-    alpha = 1.0 - 0.5 ** (1.0 / half_life)
-    result = float(values[0])
-    for value in values[1:]:
-        result = alpha * value + (1.0 - alpha) * result
-    return result
-
-
-def _trimmed_mean(values: Sequence[float]) -> float:
-    if len(values) < 5:
-        return statistics.fmean(values)
-    ordered = sorted(values)
-    return statistics.fmean(ordered[1:-1])
-
-
-def _volatility(values: Sequence[float], mean_daily: float) -> float:
-    if len(values) < 2 or mean_daily <= 0:
+    mean = statistics.fmean(values)
+    if mean <= 0:
         return 0.0
-    return statistics.pstdev(values) / mean_daily
+    return statistics.pstdev(values) / mean
 
 
-def _forecast_strategy(
+def _derive_strategy_label(
     *,
-    median_daily: float,
-    ewma_short: float,
-    ewma_long: float,
-    volatility: float,
-    isolated_spike: bool,
+    demand_profile: str,
     recent_drop: bool,
+    sustained_rise: bool,
     is_hot_style: bool,
 ) -> str:
-    baseline = max(1.0, median_daily)
-    # Double confirmation: fast signal supplies magnitude, slow signal confirms direction.
-    trending_down = (
-        ewma_short < baseline * STRATEGY_DROP_RATIO and ewma_long <= baseline
-    )
-    trending_up = (
-        ewma_short > baseline * STRATEGY_RISE_RATIO and ewma_long >= baseline
-    )
-    if recent_drop or trending_down:
+    if demand_profile == DEMAND_PROFILE_NO_SALES:
+        return FORECAST_STRATEGY_NO_SALES
+    if demand_profile == DEMAND_PROFILE_INTERMITTENT:
+        return FORECAST_STRATEGY_SLOW_MOVER
+    if recent_drop:
         return FORECAST_STRATEGY_CONSERVATIVE
-    if volatility > STRATEGY_VOLATILITY_THRESHOLD or isolated_spike:
-        return FORECAST_STRATEGY_CONSERVATIVE
-    if trending_up:
-        return FORECAST_STRATEGY_AGGRESSIVE
-    if is_hot_style and ewma_long >= baseline:
+    if sustained_rise or is_hot_style:
         return FORECAST_STRATEGY_AGGRESSIVE
     return FORECAST_STRATEGY_NORMAL
-
-
-def _forecast_daily_sales(
-    *,
-    strategy: str,
-    median_daily: float,
-    ewma_short: float,
-    ewma_long: float,
-    trimmed_mean: float,
-) -> float:
-    if strategy == FORECAST_STRATEGY_CONSERVATIVE:
-        return min(median_daily, ewma_long, trimmed_mean)
-    if strategy == FORECAST_STRATEGY_AGGRESSIVE:
-        # Aggressive follows the fast signal; the slow one tempers single-day overreactions.
-        forecast = (ewma_short * 0.7) + (ewma_long * 0.3)
-        cap = max(median_daily * 2.0, ewma_short * 1.2)
-        return min(forecast, cap)
-    return (median_daily * 0.5) + (ewma_long * 0.5)
-
-
-def _clean_isolated_spikes(values: Sequence[float]) -> tuple[list[float], bool]:
-    """Downweight one-off sales spikes that are not sustained by neighboring days."""
-    cleaned = [float(value) for value in values]
-    if len(cleaned) < ISOLATED_SPIKE_CONTEXT_DAYS:
-        return cleaned, False
-
-    changed = False
-    radius = ISOLATED_SPIKE_CONTEXT_DAYS // 2
-    for index in range(radius, len(cleaned) - radius):
-        peer_values = cleaned[:index] + cleaned[index + 1 :]
-        peer_positive = [value for value in peer_values if value > 0]
-        peer_baseline = (
-            float(statistics.median(peer_positive))
-            if peer_positive
-            else float(statistics.median(peer_values))
-        )
-        baseline = max(1.0, peer_baseline)
-        local_peer_values = (
-            cleaned[index - radius : index]
-            + cleaned[index + 1 : index + radius + 1]
-        )
-        if cleaned[index] < max(3.0, baseline * ISOLATED_SPIKE_MULTIPLIER):
-            continue
-        if cleaned[index] < ISOLATED_SPIKE_MIN_QTY:
-            continue
-        local_support_threshold = min(
-            cleaned[index] * 0.5,
-            baseline * ISOLATED_SPIKE_MULTIPLIER,
-        )
-        if any(value >= local_support_threshold for value in local_peer_values):
-            continue
-        cleaned[index] = baseline
-        changed = True
-    return cleaned, changed
-
-
-def _has_recent_sales_drop(
-    *,
-    values: Sequence[float],
-    stock_in_warehouse: float,
-) -> bool:
-    if stock_in_warehouse <= 0 or len(values) < 6:
-        return False
-
-    zero_ratio = sum(1 for value in values if value <= 0) / len(values)
-    if zero_ratio >= INTERMITTENT_ZERO_RATIO:
-        return False
-
-    recent = values[-RECENT_DROP_DAYS:]
-    previous = values[:-RECENT_DROP_DAYS]
-    previous_positive = [value for value in previous if value > 0]
-    if not previous_positive:
-        return False
-
-    baseline = float(statistics.median(previous_positive))
-    if baseline < 2.0:
-        return False
-    return statistics.fmean(recent) <= baseline * RECENT_DROP_RATIO
-
-
-def _recent_sales_average(values: Sequence[float], *, days: int) -> float:
-    if days <= 0 or not values:
-        return 0.0
-    recent = values[-days:]
-    return statistics.fmean(recent) if recent else 0.0
 
 
 def _demand_profile(
@@ -1026,100 +870,3 @@ def _anomaly_flags(
     return "、".join(flags) if flags else ANOMALY_NONE
 
 
-def _tsb_daily_sales(values: Sequence[float]) -> float:
-    if not values:
-        return 0.0
-
-    alpha = 1.0 - 0.5 ** (1.0 / EWMA_LONG_HALF_LIFE)
-    first_nonzero = next((value for value in values if value > 0), 0.0)
-    probability = 1.0 if values[0] > 0 else 0.0
-    demand_size = first_nonzero
-
-    for value in values:
-        occurrence = 1.0 if value > 0 else 0.0
-        probability = alpha * occurrence + (1.0 - alpha) * probability
-        if value > 0:
-            demand_size = alpha * value + (1.0 - alpha) * demand_size
-
-    forecast = probability * demand_size
-    if forecast <= 0 and first_nonzero > 0:
-        return statistics.fmean(values)
-    return forecast
-
-
-def _service_level(
-    *,
-    demand_profile: str,
-    strategy: str,
-    is_hot_style: bool,
-    isolated_spike: bool,
-    recent_drop: bool,
-) -> float:
-    if demand_profile == DEMAND_PROFILE_NO_SALES:
-        return SERVICE_LEVEL_NO_SALES
-    if recent_drop:
-        return SERVICE_LEVEL_CONSERVATIVE
-    if demand_profile == DEMAND_PROFILE_INTERMITTENT:
-        return SERVICE_LEVEL_INTERMITTENT
-    if demand_profile == DEMAND_PROFILE_VOLATILE or isolated_spike:
-        return SERVICE_LEVEL_VOLATILE
-    if is_hot_style or strategy == FORECAST_STRATEGY_AGGRESSIVE:
-        return SERVICE_LEVEL_AGGRESSIVE
-    return SERVICE_LEVEL_NORMAL
-
-
-def _select_forecast_model(
-    *,
-    demand_profile: str,
-    recent_drop: bool,
-) -> str:
-    if recent_drop or demand_profile == DEMAND_PROFILE_NO_SALES:
-        return MODEL_CURRENT
-    if demand_profile == DEMAND_PROFILE_INTERMITTENT:
-        return MODEL_IMAPA
-    return MODEL_TSB
-
-
-def _service_level_daily_sales(
-    *,
-    effective_daily_sales: float,
-    values: Sequence[float],
-    service_level: float,
-    demand_profile: str,
-    recent_drop: bool,
-) -> float:
-    if effective_daily_sales <= 0:
-        return 0.0
-    if recent_drop:
-        return effective_daily_sales
-    if demand_profile == DEMAND_PROFILE_INTERMITTENT:
-        return effective_daily_sales * (1.0 + max(0.0, service_level - 0.5))
-
-    empirical_daily = _empirical_quantile(values, service_level)
-    if empirical_daily <= 0:
-        return effective_daily_sales
-    return max(
-        effective_daily_sales,
-        (effective_daily_sales * 0.85) + (empirical_daily * 0.15),
-    )
-
-
-def _empirical_quantile(values: Sequence[float], probability: float) -> float:
-    if not values:
-        return 0.0
-
-    ordered = sorted(max(0.0, float(value)) for value in values)
-    if len(ordered) == 1:
-        return ordered[0]
-
-    clipped = min(1.0, max(0.0, probability))
-    position = clipped * (len(ordered) - 1)
-    lower_index = math.floor(position)
-    upper_index = math.ceil(position)
-    if lower_index == upper_index:
-        return ordered[lower_index]
-
-    lower_value = ordered[lower_index]
-    upper_value = ordered[upper_index]
-    weight = position - lower_index
-    return lower_value + ((upper_value - lower_value) * weight)

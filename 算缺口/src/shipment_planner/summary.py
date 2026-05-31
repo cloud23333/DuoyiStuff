@@ -24,7 +24,7 @@ def build_summary(
     intercepted_order_lines: int,
     intercepted_orders: int,
     small_change_kept_lines: int,
-    global_gap_multiplier: float,
+    service_level_offset: float,
     base_stock_qty: int,
 ) -> dict[str, object]:
     order_line_count = len(order_lines)
@@ -79,7 +79,7 @@ def build_summary(
         "intercepted_order_lines": intercepted_order_lines,
         "intercepted_orders": intercepted_orders,
         "small_change_kept_lines": small_change_kept_lines,
-        "global_gap_multiplier": round_qty(global_gap_multiplier),
+        "service_level_offset": round_qty(service_level_offset),
         "base_stock_qty": base_stock_qty,
         "base_stock_triggered_skus": len(base_stock_triggered_skus),
         "base_stock_triggered_lines": len(base_stock_triggered_rows),

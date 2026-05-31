@@ -80,6 +80,46 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+SPIKE_TRAIN_MULTIPLIER = 3.0
+SPIKE_MIN_ACTUAL_PER_DAY = 10.0
+DEATH_TRAIN_RATIO = 0.45
+DEATH_MIN_TRAIN_MEAN = 2.0
+
+
+def pinball_loss(*, forecast: float, actual: float, quantile: float) -> float:
+    diff = actual - forecast
+    if diff >= 0:
+        return quantile * diff
+    return (quantile - 1.0) * diff
+
+
+def fill_rate(*, forecast_quantile: float, actual: float) -> float:
+    if actual <= 0:
+        return 1.0
+    return min(1.0, forecast_quantile / actual)
+
+
+def overstock_units(*, forecast_quantile: float, actual: float) -> float:
+    return max(0.0, forecast_quantile - actual)
+
+
+def classify_holdout_segment(
+    *, train_mean: float, actual_total: float, holdout_days: int
+) -> str:
+    actual_per_day = actual_total / holdout_days if holdout_days > 0 else 0.0
+    if (
+        actual_per_day >= train_mean * SPIKE_TRAIN_MULTIPLIER
+        and actual_per_day >= SPIKE_MIN_ACTUAL_PER_DAY
+    ):
+        return "spike"
+    if (
+        train_mean >= DEATH_MIN_TRAIN_MEAN
+        and actual_per_day <= train_mean * DEATH_TRAIN_RATIO
+    ):
+        return "death"
+    return "normal"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
@@ -219,9 +259,14 @@ def _evaluate(
             apply_stockout_mask=apply_stockout_mask,
         )
 
-        forecast_holdout_total = metrics.forecast_daily_sales * holdout_days
+        # predictive_mean is already over the holdout horizon since
+        # stocking_days=holdout_days, so it is the unbiased holdout total.
+        forecast_holdout_total = metrics.predictive_mean
         actual_total = int(sum(test))
         signed_error = forecast_holdout_total - actual_total
+        forecast_daily_sales = (
+            metrics.predictive_mean / holdout_days if holdout_days > 0 else 0.0
+        )
 
         rows.append(
             EvalRow(
@@ -230,7 +275,7 @@ def _evaluate(
                 strategy=metrics.strategy,
                 train_days=len(train),
                 holdout_days=holdout_days,
-                forecast_daily_sales=_round(metrics.forecast_daily_sales),
+                forecast_daily_sales=_round(forecast_daily_sales),
                 forecast_holdout_total=_round(forecast_holdout_total),
                 actual_holdout_total=actual_total,
                 abs_error=_round(abs(signed_error)),

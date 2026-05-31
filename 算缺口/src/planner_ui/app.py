@@ -42,7 +42,7 @@ class RunRequest:
     orders_path: Path
     sales_path: Path
     output_dir: Path
-    global_gap_multiplier: float
+    service_level_offset: float
     base_stock_qty: int
     temu_sales_path: Path
 
@@ -57,7 +57,7 @@ class PlannerRunWorker(QObject):
         orders_path: Path,
         sales_path: Path,
         output_dir: Path,
-        global_gap_multiplier: float,
+        service_level_offset: float,
         base_stock_qty: int,
         temu_sales_path: Path,
     ) -> None:
@@ -65,7 +65,7 @@ class PlannerRunWorker(QObject):
         self._orders_path = orders_path
         self._sales_path = sales_path
         self._output_dir = output_dir
-        self._global_gap_multiplier = global_gap_multiplier
+        self._service_level_offset = service_level_offset
         self._base_stock_qty = base_stock_qty
         self._temu_sales_path = temu_sales_path
 
@@ -76,7 +76,7 @@ class PlannerRunWorker(QObject):
                 orders_path=self._orders_path,
                 sales_path=self._sales_path,
                 output_dir=self._output_dir,
-                global_gap_multiplier=self._global_gap_multiplier,
+                service_level_offset=self._service_level_offset,
                 base_stock_qty=self._base_stock_qty,
                 temu_sales_path=self._temu_sales_path,
             )
@@ -198,12 +198,12 @@ class PlannerWindow(QMainWindow):
         params_grid.setVerticalSpacing(6)
         params_grid.setColumnStretch(4, 1)
 
-        self.global_gap_multiplier_spin = QDoubleSpinBox()
-        self.global_gap_multiplier_spin.setDecimals(2)
-        self.global_gap_multiplier_spin.setRange(0.0001, 9999.0)
-        self.global_gap_multiplier_spin.setSingleStep(0.01)
-        self.global_gap_multiplier_spin.setValue(1.0)
-        self.global_gap_multiplier_spin.setFixedWidth(108)
+        self.service_level_offset_spin = QDoubleSpinBox()
+        self.service_level_offset_spin.setDecimals(2)
+        self.service_level_offset_spin.setRange(-0.3, 0.3)
+        self.service_level_offset_spin.setSingleStep(0.05)
+        self.service_level_offset_spin.setValue(0.0)
+        self.service_level_offset_spin.setFixedWidth(108)
 
         self.base_stock_qty_spin = QSpinBox()
         self.base_stock_qty_spin.setRange(0, 9999)
@@ -221,8 +221,8 @@ class PlannerWindow(QMainWindow):
         self.run_button.clicked.connect(self._on_run_clicked)
         self.run_button.setMinimumWidth(110)
 
-        params_grid.addWidget(QLabel("缺口系数"), 0, 0)
-        params_grid.addWidget(self.global_gap_multiplier_spin, 0, 1)
+        params_grid.addWidget(QLabel("全局服务水平偏移"), 0, 0)
+        params_grid.addWidget(self.service_level_offset_spin, 0, 1)
         params_grid.addWidget(QLabel("保底库存"), 0, 2)
         params_grid.addWidget(self.base_stock_qty_spin, 0, 3)
 
@@ -482,7 +482,7 @@ class PlannerWindow(QMainWindow):
             self.output_browse_button,
             self.temu_browse_button,
             self.open_config_dir_button,
-            self.global_gap_multiplier_spin,
+            self.service_level_offset_spin,
             self.base_stock_qty_spin,
             self.clear_log_button,
         ):
@@ -533,7 +533,7 @@ class PlannerWindow(QMainWindow):
             orders_path=Path(orders_text),
             sales_path=Path(sales_text),
             output_dir=Path(output_text),
-            global_gap_multiplier=float(self.global_gap_multiplier_spin.value()),
+            service_level_offset=float(self.service_level_offset_spin.value()),
             base_stock_qty=int(self.base_stock_qty_spin.value()),
             temu_sales_path=Path(temu_text),
         )
@@ -543,7 +543,7 @@ class PlannerWindow(QMainWindow):
             sales_path=run_request.sales_path,
             temu_sales_path=run_request.temu_sales_path,
             output_dir=run_request.output_dir,
-            global_gap_multiplier=run_request.global_gap_multiplier,
+            service_level_offset=run_request.service_level_offset,
             base_stock_qty=run_request.base_stock_qty,
         )
         if validation_error is not None:
@@ -563,7 +563,7 @@ class PlannerWindow(QMainWindow):
             orders_path=run_request.orders_path,
             sales_path=run_request.sales_path,
             output_dir=run_request.output_dir,
-            global_gap_multiplier=run_request.global_gap_multiplier,
+            service_level_offset=run_request.service_level_offset,
             base_stock_qty=run_request.base_stock_qty,
             temu_sales_path=run_request.temu_sales_path,
         )
@@ -688,7 +688,7 @@ class PlannerWindow(QMainWindow):
         sales_path: Path,
         temu_sales_path: Path,
         output_dir: Path,
-        global_gap_multiplier: float,
+        service_level_offset: float,
         base_stock_qty: int,
     ) -> str | None:
         if not orders_path.exists():
@@ -714,8 +714,8 @@ class PlannerWindow(QMainWindow):
 
         if output_dir.exists() and not output_dir.is_dir():
             return f"输出路径不是目录：{output_dir}"
-        if global_gap_multiplier <= 0:
-            return "全局缺口上浮系数必须大于 0。"
+        if not -0.3 <= service_level_offset <= 0.3:
+            return "全局服务水平偏移需在 [-0.3, 0.3] 之间。"
         if base_stock_qty < 0:
             return "保底库存不能小于 0。"
         return None

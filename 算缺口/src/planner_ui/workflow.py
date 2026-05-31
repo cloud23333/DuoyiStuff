@@ -85,7 +85,7 @@ def run_planner(
     orders_path: str | Path,
     sales_path: str | Path,
     output_dir: str | Path,
-    global_gap_multiplier: float,
+    service_level_offset: float,
     base_stock_qty: int,
     temu_sales_path: str | Path,
 ) -> PlannerRunResult:
@@ -125,8 +125,8 @@ def run_planner(
         str(out_dir),
         "--constraints",
         str(constraints_path),
-        "--global-gap-multiplier",
-        str(global_gap_multiplier),
+        "--service-level-offset",
+        str(service_level_offset),
         "--base-stock-qty",
         str(base_stock_qty),
         "--temu-sales",
@@ -216,7 +216,7 @@ def _build_localized_console_output(
     anomaly_flag_summary = summary_value("异常标记分布")
     service_level_summary = summary_value("服务水平分布")
     forecast_model_summary = summary_value("预测模型分布")
-    global_gap_multiplier = summary_value("全局缺口上浮系数")
+    service_level_offset = summary_value("全局服务水平偏移")
     base_stock_qty = summary_value("保底库存目标")
     base_stock_triggered_skus = summary_value("保底触发SKU数")
     base_stock_triggered_lines = summary_value("保底触发订单行数")
@@ -244,7 +244,7 @@ def _build_localized_console_output(
         f"异常标记分布：{anomaly_flag_summary}",
         f"服务水平分布：{service_level_summary}",
         f"预测模型分布：{forecast_model_summary}",
-        f"全局缺口倍率：{global_gap_multiplier}",
+        f"全局服务水平偏移：{service_level_offset}",
         f"保底库存目标：{base_stock_qty}",
         f"保底触发：{base_stock_triggered_skus} 个SKU，{base_stock_triggered_lines} 行",
         f"最小发货阈值：{min_order_ship_qty}",

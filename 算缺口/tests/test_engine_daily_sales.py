@@ -288,7 +288,7 @@ def test_summary_includes_forecast_explanation_distributions():
         intercepted_order_lines=0,
         intercepted_orders=0,
         small_change_kept_lines=0,
-        global_gap_multiplier=1.0,
+        service_level_offset=0.0,
         base_stock_qty=2,
     )
 
