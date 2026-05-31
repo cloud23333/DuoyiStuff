@@ -747,12 +747,12 @@ def _forecast_metrics(
     service_level_offset: float = 0.0,
 ) -> ForecastMetrics:
     values = [max(0.0, float(value)) for value in daily_sales]
-    _, isolated_spike = clean_isolated_spikes(values)
+    cleaned_values, isolated_spike = clean_isolated_spikes(values)
     recent_drop = has_recent_drop(values, stock_in_warehouse=stock_in_warehouse)
     sustained_rise = has_sustained_rise(values)
     demand_profile = _demand_profile(
-        values=values,
-        volatility=_simple_volatility(values),
+        values=cleaned_values,
+        volatility=_simple_volatility(cleaned_values),
         isolated_spike=isolated_spike,
     )
     anomaly_flags = _anomaly_flags(

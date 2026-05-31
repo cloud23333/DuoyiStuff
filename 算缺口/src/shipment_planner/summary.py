@@ -79,7 +79,7 @@ def build_summary(
         "intercepted_order_lines": intercepted_order_lines,
         "intercepted_orders": intercepted_orders,
         "small_change_kept_lines": small_change_kept_lines,
-        "全局服务水平偏移": round_qty(service_level_offset),
+        "service_level_offset": round_qty(service_level_offset),
         "base_stock_qty": base_stock_qty,
         "base_stock_triggered_skus": len(base_stock_triggered_skus),
         "base_stock_triggered_lines": len(base_stock_triggered_rows),

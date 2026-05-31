@@ -34,13 +34,6 @@ def resolve_service_level(
     return min(SERVICE_LEVEL_CEIL, max(SERVICE_LEVEL_FLOOR, level + offset))
 
 
-def horizon_quantile_units(
-    distribution: DemandDistribution, service_level: float
-) -> float:
-    """Chosen-quantile demand over the whole horizon (drives the gap)."""
-    return distribution.quantile(service_level)
-
-
 def gap_from_distribution(
     distribution: DemandDistribution,
     available_stock: float,

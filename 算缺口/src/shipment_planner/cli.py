@@ -327,7 +327,7 @@ def _print_run_summary(
     print(f"Anomaly flags: {summary['anomaly_flag_summary']}")
     print(f"Service levels: {summary['service_level_summary']}")
     print(f"Forecast models: {summary['forecast_model_summary']}")
-    print(f"Service level offset: {summary['全局服务水平偏移']}")
+    print(f"Service level offset: {summary['service_level_offset']}")
     print(f"Base stock qty: {summary['base_stock_qty']}")
     print(f"Base stock triggered SKUs: {summary['base_stock_triggered_skus']}")
     print(f"Base stock triggered lines: {summary['base_stock_triggered_lines']}")

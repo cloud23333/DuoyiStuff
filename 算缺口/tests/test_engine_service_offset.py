@@ -28,5 +28,5 @@ def test_build_recommendations_accepts_service_level_offset_not_multiplier():
         daily_sales_by_key={("skc-1", "sku-1"): (5, 5, 5, 5, 5, 5, 5, 5, 5, 5)},
         service_level_offset=0.0,
     )
-    assert "全局服务水平偏移" in summary
-    assert "全局缺口上浮系数" not in summary
+    assert "service_level_offset" in summary
+    assert "global_gap_multiplier" not in summary

@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+from .forecast_level import (
+    clean_isolated_spikes,
+    recent_mean,
+    weighted_mean,
+    weighted_variance,
+)
 
 # var/mean at or below this ratio is treated as non-overdispersed → Poisson.
 _POISSON_VAR_RATIO = 1.05
 # Safety bound so a degenerate (mean, var) can never spin forever.
 _MAX_QUANTILE_ITERS = 100_000
+# Above this dispersion size the NegBin is indistinguishable from Poisson; fall
+# back to avoid a slow near-Poisson CDF accumulation.
+_MAX_NEGBIN_SIZE = 1.0e4
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +68,8 @@ def _negbin_quantile(mean: float, variance: float, probability: float) -> float:
     if not 0.0 < success_prob < 1.0:
         return _poisson_quantile(mean, probability)
     size = (mean * mean) / (variance - mean)
+    if size > _MAX_NEGBIN_SIZE:
+        return _poisson_quantile(mean, probability)
     log_p = math.log(success_prob)
     log_q = math.log(1.0 - success_prob)
     lgamma_size = math.lgamma(size)
@@ -77,21 +90,13 @@ def _negbin_quantile(mean: float, variance: float, probability: float) -> float:
     return float(k)
 
 
-# --- append to src/shipment_planner/forecast_distribution.py ---
-from collections.abc import Sequence
-
-from .forecast_level import (
-    clean_isolated_spikes,
-    recent_mean,
-    weighted_mean,
-    weighted_variance,
-)
-
 _SHORT_HALF_LIFE = 2.0
 _LONG_HALF_LIFE = 5.0
 _RECENT_DAYS = 5
-# On a confirmed collapse, cap dispersion so the tail can't prop up the gap.
-_DROP_VAR_CAP = 1.0
+# On a confirmed collapse, pin dispersion to the mean (Poisson): the floor at
+# `level` and this cap collapse daily_var to exactly `level`, so the tail can't
+# prop up the gap on a dying SKU.
+_DROP_VAR_TO_MEAN_RATIO = 1.0
 
 
 def _normalize(values: Sequence[float]) -> list[float]:
@@ -119,7 +124,7 @@ def negbin_ewma_distribution(
     raw_mean = weighted_mean(base, _LONG_HALF_LIFE)
     daily_var = max(weighted_variance(base, _LONG_HALF_LIFE, mean=raw_mean), level)
     if recent_drop:
-        daily_var = min(daily_var, level * _DROP_VAR_CAP)
+        daily_var = min(daily_var, level * _DROP_VAR_TO_MEAN_RATIO)
     return DemandDistribution(
         horizon=horizon, mean=level * horizon, variance=daily_var * horizon
     )
@@ -149,20 +154,26 @@ def hurdle_distribution(
     positives = [value for value in base if value > 0]
     if not positives:
         return DemandDistribution(horizon=horizon, mean=0.0, variance=0.0)
-    # Level from the spike-robust series so a one-off spike doesn't inflate the
-    # mean; dispersion still comes from the RAW positives so the spike widens
-    # the interval instead.
+    # Mean level uses the spike-robust series so a one-off spike doesn't inflate
+    # the mean. Variance uses the RAW positive sizes — E[S] and Var(S) drawn from
+    # the same population — so the spike widens the interval instead.
     cleaned, _ = clean_isolated_spikes(base)
     cleaned_positives = [value for value in cleaned if value > 0] or positives
-    size = weighted_mean(cleaned_positives, _LONG_HALF_LIFE)
+    level_size = weighted_mean(cleaned_positives, _LONG_HALF_LIFE)
     raw_size = weighted_mean(positives, _LONG_HALF_LIFE)
-    size_var = weighted_variance(positives, _LONG_HALF_LIFE, mean=raw_size)
+    raw_size_var = weighted_variance(positives, _LONG_HALF_LIFE, mean=raw_size)
     if recent_drop:
         occurrence = min(occurrence, recent_mean(indicators, days=_RECENT_DAYS))
-        size = min(size, recent_mean(base, days=_RECENT_DAYS) or size)
-    day_mean = occurrence * size
-    # Compound Bernoulli×size variance: Var = φ·Var(S) + φ(1-φ)·E[S]^2
-    day_var = occurrence * size_var + occurrence * (1.0 - occurrence) * size * size
+        level_size = min(level_size, recent_mean(base, days=_RECENT_DAYS) or level_size)
+    day_mean = occurrence * level_size
+    # Compound Bernoulli×size variance on the raw size S: φ·Var(S) + φ(1-φ)·E[S]^2
+    day_var = (
+        occurrence * raw_size_var
+        + occurrence * (1.0 - occurrence) * raw_size * raw_size
+    )
     mean_h = day_mean * horizon
     var_h = max(day_var * horizon, mean_h)
+    if recent_drop:
+        # Confirmed collapse → tighten to Poisson so the tail can't prop up the gap.
+        var_h = mean_h
     return DemandDistribution(horizon=horizon, mean=mean_h, variance=var_h)
