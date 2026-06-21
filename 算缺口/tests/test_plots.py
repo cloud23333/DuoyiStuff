@@ -78,6 +78,9 @@ def test_render_sku_plot_labels_forecast_daily_sales(monkeypatch):
 
 
 class _FakeFigure:
+    def set_facecolor(self, *_args, **_kwargs):
+        pass
+
     def tight_layout(self, **_kwargs):
         pass
 
@@ -91,14 +94,24 @@ class _FakeAxis:
         self.texts: list[dict[str, object]] = []
         self.transAxes = object()
         self.yaxis = _FakeYAxis()
+        self.spines = {side: _FakeSpine() for side in ("top", "right", "left", "bottom")}
 
     def plot(self, *_args, **_kwargs):
+        pass
+
+    def fill_between(self, *_args, **_kwargs):
         pass
 
     def axhline(self, y, **kwargs):
         self.horizontal_lines.append({"y": y, **kwargs})
 
     def axvline(self, *_args, **_kwargs):
+        pass
+
+    def axvspan(self, *_args, **_kwargs):
+        pass
+
+    def set_axisbelow(self, *_args, **_kwargs):
         pass
 
     def set_title(self, *_args, **_kwargs):
@@ -125,4 +138,15 @@ class _FakeAxis:
 
 class _FakeYAxis:
     def set_major_locator(self, *_args, **_kwargs):
+        pass
+
+
+class _FakeSpine:
+    def set_visible(self, *_args, **_kwargs):
+        pass
+
+    def set_color(self, *_args, **_kwargs):
+        pass
+
+    def set_linewidth(self, *_args, **_kwargs):
         pass
