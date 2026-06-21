@@ -29,6 +29,10 @@ def test_default_is_conservative_base():
     ) == pytest.approx(SL_BASE)
 
 
+def test_base_service_level_is_conservative_default():
+    assert SL_BASE == pytest.approx(0.45)
+
+
 def test_offset_is_clamped():
     assert resolve_service_level(
         is_hot_style=False, recent_drop=False, sustained_rise=False, offset=0.9

@@ -4,7 +4,7 @@ from __future__ import annotations
 SERVICE_LEVEL_FLOOR = 0.40
 SERVICE_LEVEL_CEIL = 0.95
 SL_DEATH = 0.50
-SL_BASE = 0.40
+SL_BASE = 0.45
 SL_HOT = 0.50
 
 
