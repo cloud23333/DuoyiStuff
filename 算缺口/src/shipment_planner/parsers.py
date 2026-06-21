@@ -295,8 +295,10 @@ def parse_temu_daily_sales(
 ) -> dict[tuple[str, str], tuple[int, ...]]:
     """Parse Temu daily sales export.
 
-    Returns a mapping of (平台SKCID, 平台SKUID) → daily sales tuple (oldest → newest).
-    Rows sharing the same key (different shops) are summed.
+    Accepts either header form for the id columns (平台SKCID/平台SKC_ID and
+    平台SKUID/平台SKU_ID); the matched alias value becomes the map key. Returns a
+    mapping of (skc_id, sku_id) → daily sales tuple (oldest → newest). Rows sharing
+    the same key (different shops) are summed.
     """
     all_cols = list(dict.fromkeys(column_name for row in rows for column_name in row))
     assert_temu_daily_sales_columns(all_cols, "Temu daily sales file")
