@@ -5,7 +5,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .forecast_level import (
-    clean_isolated_spikes,
     recent_mean,
     robust_level,
     weighted_mean,
@@ -154,19 +153,13 @@ def hurdle_distribution(
     positives = [value for value in base if value > 0]
     if not positives:
         return DemandDistribution(horizon=horizon, mean=0.0, variance=0.0)
-    # Mean level uses the spike-robust series so a one-off spike doesn't inflate
-    # the mean. Variance uses the RAW positive sizes — E[S] and Var(S) drawn from
-    # the same population — so the spike widens the interval instead.
-    cleaned, _ = clean_isolated_spikes(base)
-    cleaned_positives = [value for value in cleaned if value > 0] or positives
-    level_size = weighted_mean(cleaned_positives, _LONG_HALF_LIFE)
+    level_size = robust_level(positives)
     raw_size = weighted_mean(positives, _LONG_HALF_LIFE)
     raw_size_var = weighted_variance(positives, _LONG_HALF_LIFE, mean=raw_size)
     if recent_drop:
         occurrence = min(occurrence, recent_mean(indicators, days=_RECENT_DAYS))
         level_size = min(level_size, recent_mean(base, days=_RECENT_DAYS) or level_size)
     day_mean = occurrence * level_size
-    # Compound Bernoulli×size variance on the raw size S: φ·Var(S) + φ(1-φ)·E[S]^2
     day_var = (
         occurrence * raw_size_var
         + occurrence * (1.0 - occurrence) * raw_size * raw_size
@@ -174,6 +167,5 @@ def hurdle_distribution(
     mean_h = day_mean * horizon
     var_h = max(day_var * horizon, mean_h)
     if recent_drop:
-        # Confirmed collapse → tighten to Poisson so the tail can't prop up the gap.
         var_h = mean_h
     return DemandDistribution(horizon=horizon, mean=mean_h, variance=var_h)
