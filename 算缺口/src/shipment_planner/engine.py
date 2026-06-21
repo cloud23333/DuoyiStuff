@@ -543,7 +543,6 @@ def _build_key_states(
         forecast_metrics = compute_forecast_metrics(
             daily_sales=daily_sales_by_key[key],
             stocking_days=sales.stocking_days,
-            is_hot_style=sales.is_hot_style,
             stock_in_warehouse=sales.stock_in_warehouse,
             service_level_offset=service_level_offset,
         )
@@ -684,7 +683,6 @@ def compute_forecast_metrics(
     *,
     daily_sales: tuple[int, ...],
     stocking_days: float,
-    is_hot_style: bool,
     stock_in_warehouse: float = 0.0,
     apply_stockout_mask: bool = True,
     service_level_offset: float = 0.0,
@@ -703,7 +701,6 @@ def compute_forecast_metrics(
     return _forecast_metrics(
         daily_sales=sales_explanation.daily_sales,
         stocking_days=stocking_days,
-        is_hot_style=is_hot_style,
         stock_in_warehouse=stock_in_warehouse,
         single_day_big_order=sales_explanation.single_day_big_order,
         stockout_tail=sales_explanation.stockout_tail,
@@ -740,7 +737,6 @@ def _forecast_metrics(
     *,
     daily_sales: Sequence[float],
     stocking_days: float,
-    is_hot_style: bool,
     stock_in_warehouse: float = 0.0,
     single_day_big_order: bool = False,
     stockout_tail: bool = False,
@@ -767,7 +763,6 @@ def _forecast_metrics(
     distribution = estimator(values, horizon=horizon, recent_drop=recent_drop)
 
     service_level = resolve_service_level(
-        is_hot_style=is_hot_style,
         recent_drop=recent_drop,
         sustained_rise=sustained_rise,
         offset=service_level_offset,
@@ -787,7 +782,6 @@ def _forecast_metrics(
         demand_profile=demand_profile,
         recent_drop=recent_drop,
         sustained_rise=sustained_rise,
-        is_hot_style=is_hot_style,
     )
     return ForecastMetrics(
         strategy=strategy,
@@ -817,7 +811,6 @@ def _derive_strategy_label(
     demand_profile: str,
     recent_drop: bool,
     sustained_rise: bool,
-    is_hot_style: bool,
 ) -> str:
     if demand_profile == DEMAND_PROFILE_NO_SALES:
         return FORECAST_STRATEGY_NO_SALES
@@ -825,7 +818,7 @@ def _derive_strategy_label(
         return FORECAST_STRATEGY_SLOW_MOVER
     if recent_drop:
         return FORECAST_STRATEGY_CONSERVATIVE
-    if sustained_rise or is_hot_style:
+    if sustained_rise:
         return FORECAST_STRATEGY_AGGRESSIVE
     return FORECAST_STRATEGY_NORMAL
 

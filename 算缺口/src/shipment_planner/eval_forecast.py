@@ -55,7 +55,7 @@ class EvalRow:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate forecast accuracy over a holdout window.")
-    parser.add_argument("--sales", required=True, help="Sales xlsx (for stocking_days, is_hot_style, stock)")
+    parser.add_argument("--sales", required=True, help="Sales xlsx (for stocking_days, stock)")
     parser.add_argument("--temu-sales", required=True, help="Temu daily sales xlsx")
     parser.add_argument("--holdout-days", type=int, default=7, help="Trailing days to hold out (default: 7)")
     parser.add_argument("--out-dir", default="data/output", help="Output directory (default: data/output)")
@@ -215,7 +215,6 @@ def _evaluate(
         test = daily[-holdout_days:]
 
         sales = sales_by_key.get(key)
-        is_hot_style = getattr(sales, "is_hot_style", False) if sales is not None else False
         stock_in_warehouse = (
             getattr(sales, "stock_in_warehouse", 0.0) if sales is not None else 0.0
         )
@@ -223,7 +222,6 @@ def _evaluate(
         metrics = compute_forecast_metrics(
             daily_sales=train,
             stocking_days=holdout_days,
-            is_hot_style=is_hot_style,
             stock_in_warehouse=stock_in_warehouse,
             apply_stockout_mask=apply_stockout_mask,
         )
