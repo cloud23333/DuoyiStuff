@@ -34,6 +34,22 @@ def test_clean_isolated_spikes_flattens_one_off():
     assert cleaned[3] < 42
 
 
+def test_clean_isolated_spikes_cleans_last_day():
+    cleaned, changed = clean_isolated_spikes([4, 5, 5, 4, 5, 4, 42])
+    assert changed is True
+    assert cleaned[-1] < 42
+
+
+def test_clean_isolated_spikes_cleans_first_day():
+    cleaned, changed = clean_isolated_spikes([42, 5, 5, 4, 5, 4, 5])
+    assert changed is True
+    assert cleaned[0] < 42
+
+
+def test_has_sustained_rise_false_for_trailing_one_off_spike():
+    assert has_sustained_rise([4, 5, 5, 4, 5, 4, 5, 4, 5, 42]) is False
+
+
 def test_has_recent_drop_detects_collapse():
     assert has_recent_drop([10, 11, 10, 12, 10, 2, 1, 2, 1, 2], stock_in_warehouse=20) is True
 

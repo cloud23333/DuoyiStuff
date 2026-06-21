@@ -75,7 +75,7 @@ def clean_isolated_spikes(values: Sequence[float]) -> tuple[list[float], bool]:
 
     changed = False
     radius = ISOLATED_SPIKE_CONTEXT_DAYS // 2
-    for index in range(radius, len(cleaned) - radius):
+    for index in range(len(cleaned)):
         peer_values = cleaned[:index] + cleaned[index + 1 :]
         peer_positive = [value for value in peer_values if value > 0]
         peer_baseline = (
