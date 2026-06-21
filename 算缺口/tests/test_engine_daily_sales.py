@@ -215,6 +215,23 @@ def test_forecast_gap_takes_precedence_when_larger_than_base_stock_gap():
     assert row["recommended_ship"] > row["base_stock_gap"]
 
 
+def test_base_stock_floor_exempts_low_qty_order_when_forecast_dominates():
+    recommendations, _quality_rows, _summary = build_recommendations(
+        order_lines=[_order_line(quantity=10)],
+        sales_records=[_sales_record()],
+        daily_sales_by_key={("1064826604", "8482832088"): (1, 0, 0, 1, 0, 0, 1)},
+        min_order_ship_qty=10,
+        base_stock_qty=2,
+    )
+
+    row = recommendations[0]
+    assert row["base_stock_gap"] == 2
+    assert row["base_stock_triggered_warning"] == "no"
+    assert row["order_recommended_ship_total_before_threshold"] == 3
+    assert row["min_order_ship_qty_exempt_applied_warning"] == "yes"
+    assert row["recommended_ship"] == 3
+
+
 def test_base_stock_can_be_disabled():
     recommendations, _quality_rows, summary = build_recommendations(
         order_lines=[_order_line(quantity=8)],

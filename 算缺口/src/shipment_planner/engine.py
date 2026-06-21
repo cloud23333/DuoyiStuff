@@ -551,8 +551,9 @@ def _build_key_states(
             base_stock_qty=base_stock_qty,
             available_stock=available_stock,
         )
+        base_stock_below_floor = base_stock_gap_raw > 0
         base_stock_triggered = (
-            base_stock_gap_raw > 0 and base_stock_gap_raw >= forecast_gap
+            base_stock_below_floor and base_stock_gap_raw >= forecast_gap
         )
         raw_gap = max(forecast_gap, base_stock_gap_raw)
         gap = math.ceil(raw_gap)
@@ -565,7 +566,7 @@ def _build_key_states(
             gap=gap,
             recommended_qty_total=recommended_qty_total,
             forecast_metrics=forecast_metrics,
-            min_order_ship_qty_exempt_eligible=base_stock_triggered,
+            min_order_ship_qty_exempt_eligible=base_stock_below_floor,
             base_stock_qty=base_stock_qty,
             base_stock_gap=math.ceil(base_stock_gap_raw),
             base_stock_triggered=base_stock_triggered,
