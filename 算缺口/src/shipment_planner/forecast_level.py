@@ -48,6 +48,50 @@ def weighted_variance(
     return sum(w * (float(v) - center) ** 2 for w, v in zip(weights, values))
 
 
+ROBUST_LEVEL_HALF_LIFE = 5.0
+WINSOR_UPPER_QUANTILE = 0.9
+TRIM_FRACTION = 0.2
+
+
+def winsorize(values: Sequence[float], upper_quantile: float = WINSOR_UPPER_QUANTILE) -> list[float]:
+    """Cap values at the ``upper_quantile`` element (nearest-rank, inclusive at 1.0).
+
+    The nearest-rank index floors, so on very short series the cap lands lower than
+    the quantile suggests; this only biases the estimate downward, which is the
+    intended conservative direction for spike-robust level estimation.
+    """
+    if not values:
+        return []
+    ordered = sorted(values)
+    cap_index = min(len(ordered) - 1, int(upper_quantile * (len(ordered) - 1)))
+    cap = ordered[cap_index]
+    return [min(float(value), cap) for value in values]
+
+
+def trimmed_mean(values: Sequence[float], trim_fraction: float = TRIM_FRACTION) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(value) for value in values)
+    cut = int(trim_fraction * len(ordered))
+    core = ordered[cut : len(ordered) - cut] or ordered
+    return statistics.fmean(core)
+
+
+def robust_level(values: Sequence[float], half_life: float = ROBUST_LEVEL_HALF_LIFE) -> float:
+    """Spike-robust daily level.
+
+    Lower of two views so a one-off jump can enter neither:
+      - a recency-weighted mean of the winsorized series (follows real trends), and
+      - a robust central value, max(median, trimmed mean), acting as a cap.
+    """
+    base = [max(0.0, float(value)) for value in values]
+    if not base:
+        return 0.0
+    follow = weighted_mean(winsorize(base), half_life)
+    central_cap = max(statistics.median(base), trimmed_mean(base))
+    return min(follow, central_cap)
+
+
 def ewma(values: Sequence[float], half_life: float) -> float:
     if not values:
         return 0.0

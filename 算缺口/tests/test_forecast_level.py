@@ -8,8 +8,11 @@ from shipment_planner.forecast_level import (
     has_recent_drop,
     has_sustained_rise,
     recent_mean,
+    robust_level,
+    trimmed_mean,
     weighted_mean,
     weighted_variance,
+    winsorize,
 )
 
 
@@ -57,3 +60,37 @@ def test_has_recent_drop_detects_collapse():
 def test_has_sustained_rise_detects_trend():
     assert has_sustained_rise([2, 2, 2, 2, 8, 9, 10]) is True
     assert has_sustained_rise([4, 5, 5, 42, 4, 5, 4]) is False  # one-off spike, not sustained
+
+
+def test_trimmed_mean_ignores_extremes():
+    assert trimmed_mean([0, 5, 5, 5, 100], trim_fraction=0.2) == pytest.approx(5.0)
+
+
+def test_winsorize_caps_top_values():
+    capped = winsorize([1, 2, 3, 4, 100], upper_quantile=0.8)
+    assert max(capped) <= 4
+    assert capped[:4] == [1, 2, 3, 4]
+
+
+def test_robust_level_ignores_one_off_spike():
+    baseline = [5, 5, 6, 5, 4, 5, 6, 5, 4, 5]
+    spiked = baseline + [40, 38]
+    base = robust_level(baseline)
+    after_spike = robust_level(spiked)
+    assert after_spike < base * 1.25
+
+
+def test_robust_level_follows_genuine_rise_but_capped():
+    rising = [10, 12, 15, 18, 22, 26, 30, 34, 40, 46]
+    level = robust_level(rising)
+    assert level > 15
+    assert level < max(rising)
+
+
+def test_robust_estimators_handle_empty_and_degenerate_input():
+    assert winsorize([]) == []
+    assert trimmed_mean([]) == pytest.approx(0.0)
+    assert robust_level([]) == pytest.approx(0.0)
+    assert robust_level([7]) == pytest.approx(7.0)
+    assert robust_level([0, 0, 0, 0]) == pytest.approx(0.0)
+    assert robust_level([-3, -2, -5]) == pytest.approx(0.0)
