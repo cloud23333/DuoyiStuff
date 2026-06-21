@@ -51,6 +51,22 @@ def test_recommendation_xlsx_is_execution_first(tmp_path):
     )
 
 
+def test_recommendation_xlsx_last_column_is_formula_derivation(tmp_path):
+    path = _write_test_recommendation_report(tmp_path)
+
+    workbook = load_workbook(path)
+    worksheet = workbook["发货建议明细"]
+    headers = [worksheet.cell(row=1, column=col).value for col in range(1, worksheet.max_column + 1)]
+
+    assert headers[-1] == "缺口与发货量推导"
+
+    formula = worksheet.cell(row=2, column=worksheet.max_column).value
+    assert "可用库存 = 仓内1+待收2+发货中3 = 6" in formula
+    assert "缺口 = ⌈max(预测21−可用6, 保底2−可用6, 0)⌉ = 15" in formula
+    assert "同款建议 = min(同款下单20, 缺口15) = 15" in formula
+    assert "∴ 建议发货量 = 6" in formula
+
+
 def test_recommendation_xlsx_has_readability_formatting(tmp_path):
     path = _write_test_recommendation_report(tmp_path)
 

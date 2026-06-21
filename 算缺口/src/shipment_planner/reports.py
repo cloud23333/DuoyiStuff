@@ -63,7 +63,11 @@ RECOMMENDATION_FIELDS = [
     ("base_stock_triggered_warning", "保底是否触发"),
     ("intercept_reason", "拦截原因"),
     ("order_intercept_warning", "订单拦截导致不发提示"),
+    ("__formula__", "缺口与发货量推导"),
 ]
+
+FORMULA_COLUMN_NAME = "缺口与发货量推导"
+FORMULA_COLUMN_WIDTH_CHARS = 48.0
 
 PLOT_COLUMN_NAME = "销量与预测曲线"
 PLOT_COLUMN_WIDTH_CHARS = 46.0
@@ -113,6 +117,7 @@ TEXT_WRAP_COLUMNS = {
     "商品定位",
     "处理提示",
     "异常标记",
+    "缺口与发货量推导",
 }
 
 HEADER_GROUP_FILLS = {
@@ -594,6 +599,8 @@ def _recommended_column_width(
     source: str,
     name: str,
 ) -> float:
+    if name == FORMULA_COLUMN_NAME:
+        return FORMULA_COLUMN_WIDTH_CHARS
     if name in TEXT_WRAP_COLUMNS:
         return 24.0 if source == "__item_identity__" else TEXT_WRAP_COLUMN_WIDTH_CHARS
     if source == "internal_order_id":
@@ -743,6 +750,8 @@ def _recommendation_derived_value(source: str, row: dict[str, object]) -> object
         return _build_item_identity(row)
     if source == "__action_notes__":
         return _build_action_notes(row)
+    if source == "__formula__":
+        return _build_formula(row)
     if source == "__available_stock__":
         return _format_int_like(
             round(
@@ -798,6 +807,68 @@ def _build_action_notes(row: dict[str, object]) -> str:
         notes.append(f"销量异常：{anomaly_flags}")
 
     return "；".join(notes)
+
+
+def _fmt_num(value: object) -> str:
+    number = round(_as_float(value), 2)
+    if number == int(number):
+        return str(int(number))
+    return f"{number:.2f}".rstrip("0").rstrip(".")
+
+
+def _build_formula(row: dict[str, object]) -> str:
+    wh = _as_float(row.get("wh"))
+    recv = _as_float(row.get("pending_recv"))
+    ship = _as_float(row.get("shipping_in_progress"))
+    available = wh + recv + ship
+    forecast_period = _as_float(row.get("forecast_stocking_period_sales"))
+    base_stock = _as_float(row.get("base_stock_qty"))
+    gap = _as_float(row.get("gap"))
+    key_order_qty = _as_float(row.get("key_order_qty"))
+    allocated = _as_float(row.get("recommended_ship_before_small_change_rule"))
+    line_qty = _as_float(row.get("line_order_qty"))
+    final_ship = _as_float(row.get("recommended_ship"))
+    key_recommended = min(key_order_qty, gap)
+
+    steps = [
+        f"可用库存 = 仓内{_fmt_num(wh)}+待收{_fmt_num(recv)}"
+        f"+发货中{_fmt_num(ship)} = {_fmt_num(available)}"
+    ]
+    if base_stock > 0:
+        steps.append(
+            f"缺口 = ⌈max(预测{_fmt_num(forecast_period)}−可用{_fmt_num(available)}, "
+            f"保底{_fmt_num(base_stock)}−可用{_fmt_num(available)}, 0)⌉ = {_fmt_num(gap)}"
+        )
+    else:
+        steps.append(
+            f"缺口 = ⌈max(预测{_fmt_num(forecast_period)}−可用{_fmt_num(available)}, 0)⌉"
+            f" = {_fmt_num(gap)}"
+        )
+    steps.append(
+        f"同款建议 = min(同款下单{_fmt_num(key_order_qty)}, 缺口{_fmt_num(gap)})"
+        f" = {_fmt_num(key_recommended)}"
+    )
+    if allocated != key_recommended:
+        steps.append(f"本行分摊 = {_fmt_num(allocated)}")
+
+    intercept_reason = str(row.get("intercept_reason", "")).strip()
+    if intercept_reason:
+        label = INTERCEPT_REASON_MAP.get(intercept_reason, intercept_reason)
+        steps.append(f"{label} → 0")
+    if _is_yes(row.get("small_change_keep_warning")):
+        steps.append(
+            f"30%免改：|下单{_fmt_num(line_qty)}−分摊{_fmt_num(allocated)}|"
+            f"/{_fmt_num(line_qty)} ≤ 30% → 保留原量"
+        )
+    threshold = _fmt_num(row.get("min_order_ship_qty_threshold"))
+    order_total = _fmt_num(row.get("order_recommended_ship_total_before_threshold"))
+    if _is_yes(row.get("min_order_ship_qty_exempt_applied_warning")):
+        steps.append(f"订单合计{order_total} < 起发{threshold}，保底豁免 → 保留")
+    elif _is_yes(row.get("order_low_qty_warning")):
+        steps.append(f"订单合计{order_total} < 起发{threshold} → 0")
+
+    steps.append(f"∴ 建议发货量 = {_fmt_num(final_ship)}")
+    return "\n".join(steps)
 
 
 def _is_yes(value: object) -> bool:
