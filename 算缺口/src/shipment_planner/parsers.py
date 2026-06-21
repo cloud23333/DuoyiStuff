@@ -57,17 +57,13 @@ def assert_xlsx(path: str | Path) -> None:
 def assert_required_columns(header: list[str], required: list[str], file_label: str) -> None:
     missing = missing_required_columns(header, required)
     if missing:
-        joined = ", ".join(describe_required_column(column_name) for column_name in missing)
+        joined = ", ".join(missing)
         raise ValueError(f"Missing required columns in {file_label}: {joined}")
 
 
 def missing_required_columns(header: list[str], required: list[str]) -> list[str]:
     header_set = set(header)
     return [column_name for column_name in required if column_name not in header_set]
-
-
-def describe_required_column(column_name: str) -> str:
-    return column_name
 
 
 def parse_orders(rows: list[dict[str, str]]) -> tuple[list[OrderLine], dict[tuple[str, str], int]]:

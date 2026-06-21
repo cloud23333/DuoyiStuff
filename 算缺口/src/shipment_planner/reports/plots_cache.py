@@ -34,10 +34,9 @@ def _build_plot_cache(
     from ..plots import render_sku_plot
 
     cache: dict[tuple[str, str], bytes] = {}
-    plot_keys = _plot_keys(recommendations)
     for row in recommendations:
         key = (str(row.get("店铺款式编码", "")), str(row.get("店铺商品编码", "")))
-        if key in cache or key not in plot_keys:
+        if key in cache:
             continue
         history = daily_sales_by_key.get(key, ())
         forecast = build_forecast_curve(
@@ -71,13 +70,3 @@ def _plot_title(
     if not model:
         return base
     return f"{base} | {model}"
-
-
-def _plot_keys(
-    recommendations: list[dict[str, object]],
-) -> set[tuple[str, str]]:
-    keys: set[tuple[str, str]] = set()
-    for row in recommendations:
-        key = (str(row.get("店铺款式编码", "")), str(row.get("店铺商品编码", "")))
-        keys.add(key)
-    return keys

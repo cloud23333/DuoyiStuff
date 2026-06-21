@@ -14,7 +14,6 @@ from shipment_planner.parsers import (
     ORDER_REQUIRED_COLUMNS,
     SALES_REQUIRED_COLUMNS,
     TEMU_DAILY_REQUIRED_COLUMNS,
-    describe_required_column,
     missing_required_columns,
     temu_daily_sales_columns,
 )
@@ -182,7 +181,7 @@ def _assert_xlsx(path: Path, label: str) -> None:
 def _assert_required_columns(header: list[str], required: list[str], label: str) -> None:
     missing = missing_required_columns(header, required)
     if missing:
-        details = ", ".join(describe_required_column(column_name) for column_name in missing)
+        details = ", ".join(missing)
         raise ValueError(f"{label}缺少必填列：{details}")
 
 
