@@ -22,6 +22,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from shipment_planner.engine import compute_forecast_metrics  # noqa: E402
 from shipment_planner.forecast_distribution import horizon_quantile  # noqa: E402
+from shipment_planner.forecast_level import (  # noqa: E402
+    robust_level,
+    weighted_mean,
+    weighted_variance,
+)
 from shipment_planner.parsers import parse_int, temu_daily_sales_columns  # noqa: E402
 from shipment_planner.xlsx_reader import read_xlsx_table  # noqa: E402
 
@@ -56,47 +61,10 @@ def load_series(data_dir: Path) -> dict[tuple[str, str], list[float]]:
     return {k: v for k, v in series.items() if sum(v) > 0}
 
 
-def wmean(values: list[float], half_life: float) -> float:
-    n = len(values)
-    decay = 0.5 ** (1.0 / half_life)
-    weights = [decay ** (n - 1 - i) for i in range(n)]
-    return sum(w * v for w, v in zip(weights, values)) / sum(weights)
-
-
-def wvar(values: list[float], half_life: float, mean: float) -> float:
-    if len(values) < 2:
-        return 0.0
-    n = len(values)
-    decay = 0.5 ** (1.0 / half_life)
-    weights = [decay ** (n - 1 - i) for i in range(n)]
-    return sum(w * (v - mean) ** 2 for w, v in zip(weights, values)) / sum(weights)
-
-
-def winsor(values: list[float], p: float = 0.9) -> list[float]:
-    ordered = sorted(values)
-    cap = ordered[min(len(ordered) - 1, int(p * len(ordered)))]
-    return [min(v, cap) for v in values]
-
-
-def trimmed(values: list[float], frac: float = 0.2) -> float:
-    ordered = sorted(values)
-    k = int(frac * len(ordered))
-    core = ordered[k : len(ordered) - k] or ordered
-    return statistics.fmean(core)
-
-
-def robust_level(train: list[float]) -> float:
-    """The recommended spike-robust daily level."""
-    return min(
-        wmean(winsor(train, 0.9), 5),
-        max(statistics.median(train), trimmed(train, 0.2)),
-    )
-
-
 def recommended_decision(train: list[float], horizon: int, service_level: float) -> float:
     level = robust_level(train)
-    raw_mean = wmean(train, 5)
-    variance = max(wvar(train, 5, raw_mean), level)
+    raw_mean = weighted_mean(train, 5.0)
+    variance = max(weighted_variance(train, 5.0, mean=raw_mean), level)
     quantile = horizon_quantile(
         mean=level * horizon, variance=variance * horizon, probability=service_level
     )
