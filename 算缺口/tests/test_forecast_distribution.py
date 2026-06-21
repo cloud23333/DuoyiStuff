@@ -5,6 +5,7 @@ import pytest
 from shipment_planner.forecast_distribution import (
     DemandDistribution,
     horizon_quantile,
+    negbin_ewma_distribution,
 )
 
 
@@ -32,3 +33,11 @@ def test_zero_mean_returns_zero():
 def test_distribution_quantile_delegates():
     dist = DemandDistribution(horizon=7, mean=10.0, variance=10.0)
     assert dist.quantile(0.5) == pytest.approx(10.0)
+
+
+def test_negbin_level_ignores_recent_spike():
+    baseline = [5, 5, 6, 5, 4, 5, 6, 5, 4, 5]
+    spiked = baseline + [40, 38]
+    base_daily = negbin_ewma_distribution(baseline, horizon=7).mean / 7
+    spiked_daily = negbin_ewma_distribution(spiked, horizon=7).mean / 7
+    assert spiked_daily < base_daily * 1.8

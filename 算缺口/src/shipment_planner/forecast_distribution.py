@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from .forecast_level import (
     clean_isolated_spikes,
     recent_mean,
+    robust_level,
     weighted_mean,
     weighted_variance,
 )
@@ -105,8 +106,7 @@ def _normalize(values: Sequence[float]) -> list[float]:
 
 def _level(values: list[float], *, recent_drop: bool) -> float:
     """Spike-robust, recency-weighted daily level; capped on recent collapse."""
-    cleaned, _ = clean_isolated_spikes(values)
-    level = weighted_mean(cleaned, _SHORT_HALF_LIFE)
+    level = robust_level(values)
     if recent_drop:
         level = min(level, recent_mean(values, days=_RECENT_DAYS))
     return level
