@@ -7,6 +7,7 @@ from shipment_planner.models import OrderLine, SalesRecord
 import pytest
 
 from shipment_planner.parsers import (
+    SALES_REQUIRED_COLUMNS,
     assert_temu_daily_sales_columns,
     parse_temu_daily_sales,
 )
@@ -28,6 +29,10 @@ def test_parse_temu_daily_sales_rejects_legacy_headers():
 def test_assert_temu_daily_sales_columns_raises_when_id_missing():
     with pytest.raises(ValueError):
         assert_temu_daily_sales_columns(["商品名称", "06月01日销量"], "Temu daily sales file")
+
+
+def test_sales_required_columns_excludes_hot_style():
+    assert "平台商品基本信息-是否热销款" not in SALES_REQUIRED_COLUMNS
 
 
 def _order_line(
@@ -55,7 +60,6 @@ def _sales_record(
     stock_in_warehouse: float = 0,
     pending_receive: float = 0,
     pending_ship: float = 0,
-    is_hot_style: bool = False,
     skc: str = "1064826604",
     skuid: str = "8482832088",
     system_sku: str = "SKU-1",
@@ -66,7 +70,6 @@ def _sales_record(
         skc=skc,
         skuid=skuid,
         system_sku=system_sku,
-        is_hot_style=is_hot_style,
         stocking_days=stocking_days,
         stock_in_warehouse=stock_in_warehouse,
         pending_receive=pending_receive,
@@ -134,7 +137,7 @@ def test_all_zero_sales_gets_default_base_stock_recommendation():
 def test_single_day_big_order_without_small_sales_uses_base_stock_only():
     recommendations, _quality_rows, summary = build_recommendations(
         order_lines=[_order_line(quantity=36)],
-        sales_records=[_sales_record(is_hot_style=True, stocking_days=17)],
+        sales_records=[_sales_record(stocking_days=17)],
         daily_sales_by_key={
             ("1064826604", "8482832088"): (
                 0,

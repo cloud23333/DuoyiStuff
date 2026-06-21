@@ -25,7 +25,6 @@ ORDER_REQUIRED_COLUMNS = [
 
 SALES_REQUIRED_COLUMNS = [
     "平台商品基本信息-skc",
-    "平台商品基本信息-是否热销款",
     "平台商品基本信息-平台SKUID",
     "平台商品基本信息-SKU货号",
     "平台商品基本信息-备货逻辑",
@@ -43,7 +42,6 @@ TAG_SPLIT_RE = re.compile(r"[，,]")
 IN_PROGRESS_STATUS = "发货中"
 SHORTAGE_STATUS = "缺货"
 ORDER_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
-HOT_STYLE_TRUE_VALUES = {"是", "true", "1", "yes", "y"}
 NumberT = TypeVar("NumberT", int, float)
 
 
@@ -126,7 +124,6 @@ def parse_sales(rows: list[dict[str, str]]) -> list[SalesRecord]:
                 skc=skc,
                 skuid=skuid,
                 system_sku=system_sku,
-                is_hot_style=parse_hot_style(row_get("平台商品基本信息-是否热销款")),
                 stocking_days=parse_stocking_days(row_get("平台商品基本信息-备货逻辑")),
                 stock_in_warehouse=parse_float(row_get("平台商品库存信息-平台仓内库存")),
                 pending_ship=parse_float(row_get("平台商品库存信息-平台待发货库存")),
@@ -242,10 +239,6 @@ def _parse_number_or_default(
         return parser(text)
     except ValueError:
         return default
-
-
-def parse_hot_style(value: str | None) -> bool:
-    return _clean_text(value).lower() in HOT_STYLE_TRUE_VALUES
 
 
 def _temu_date_sort_key(col: str) -> tuple[int, int]:

@@ -13,7 +13,7 @@ def test_eval_accuracy_uses_predictive_mean(monkeypatch):
         )
 
     monkeypatch.setattr(eval_forecast, "compute_forecast_metrics", fake)
-    sales = [SalesRecord(2, "skc-1", "sku-1", "l1", False, 30, 10, 0, 0)]
+    sales = [SalesRecord(2, "skc-1", "sku-1", "l1", 30, 10, 0, 0)]
     rows, _, _ = eval_forecast.run_holdout_eval(
         sales_records=sales,
         daily_sales_by_key={("skc-1", "sku-1"): (2, 2, 2, 2, 2, 2)},

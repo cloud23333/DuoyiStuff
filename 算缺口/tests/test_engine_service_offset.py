@@ -17,7 +17,7 @@ def _order(qty=20):
 def _sales():
     return SalesRecord(
         row_number=2, skc="skc-1", skuid="sku-1", system_sku="ZX1",
-        is_hot_style=False, stocking_days=7, stock_in_warehouse=0,
+        stocking_days=7, stock_in_warehouse=0,
         pending_receive=0, pending_ship=0,
     )
 

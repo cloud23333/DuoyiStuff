@@ -447,7 +447,6 @@ def _build_sales_lookup(
                 "stock_in_warehouse": record.stock_in_warehouse,
                 "pending_receive": record.pending_receive,
                 "pending_ship": record.pending_ship,
-                "is_hot_style": record.is_hot_style,
                 "system_sku": record.system_sku,
             }
         else:
@@ -458,7 +457,6 @@ def _build_sales_lookup(
                 "stock_in_warehouse": acc["stock_in_warehouse"] + record.stock_in_warehouse,
                 "pending_receive": acc["pending_receive"] + record.pending_receive,
                 "pending_ship": acc["pending_ship"] + record.pending_ship,
-                "is_hot_style": acc["is_hot_style"] or record.is_hot_style,
                 "system_sku": acc["system_sku"] if acc["system_sku"] else record.system_sku,
             }
 
@@ -472,7 +470,6 @@ def _build_sales_lookup(
             stock_in_warehouse=acc["stock_in_warehouse"],
             pending_receive=acc["pending_receive"],
             pending_ship=acc["pending_ship"],
-            is_hot_style=acc["is_hot_style"],
             system_sku=acc["system_sku"],
         )
         for key, acc in accum.items()

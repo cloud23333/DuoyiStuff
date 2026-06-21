@@ -23,7 +23,6 @@ class SalesRecord:
     skc: str
     skuid: str
     system_sku: str
-    is_hot_style: bool
     stocking_days: float
     stock_in_warehouse: float
     pending_receive: float
