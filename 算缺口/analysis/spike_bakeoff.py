@@ -48,8 +48,8 @@ def load_series(data_dir: Path) -> dict[tuple[str, str], list[float]]:
     date_cols = temu_daily_sales_columns(header)
     series: dict[tuple[str, str], list[float]] = {}
     for row in rows:
-        skc = _col(row, "平台SKC_ID", "平台SKCID").strip()
-        sku = _col(row, "平台SKU_ID", "平台SKUID").strip()
+        skc = _col(row, "平台SKC_ID").strip()
+        sku = _col(row, "平台SKU_ID").strip()
         if not skc or not sku:
             continue
         daily = [float(parse_int(row.get(c))) for c in date_cols]

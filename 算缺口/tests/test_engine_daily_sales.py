@@ -19,16 +19,10 @@ def test_parse_temu_daily_sales_accepts_underscore_headers():
     assert result[("A", "1")] == (3, 5)
 
 
-def test_parse_temu_daily_sales_accepts_legacy_headers():
+def test_parse_temu_daily_sales_rejects_legacy_headers():
     rows = [{"平台SKCID": "B", "平台SKUID": "2", "06月01日销量": "1", "06月02日销量": "2"}]
-    result = parse_temu_daily_sales(rows)
-    assert result[("B", "2")] == (1, 2)
-
-
-def test_parse_temu_daily_sales_prefers_legacy_when_both_present():
-    rows = [{"平台SKCID": "L", "平台SKC_ID": "U", "平台SKUID": "9", "平台SKU_ID": "8", "06月01日销量": "4"}]
-    result = parse_temu_daily_sales(rows)
-    assert result == {("L", "9"): (4,)}
+    with pytest.raises(ValueError):
+        parse_temu_daily_sales(rows)
 
 
 def test_assert_temu_daily_sales_columns_raises_when_id_missing():
