@@ -36,100 +36,12 @@ def render_sku_plot(
     """
     fig, ax = plt.subplots(figsize=(_PLOT_WIDTH_IN, _PLOT_HEIGHT_IN), dpi=_PLOT_DPI)
     try:
-        hist_len = len(history)
-        fc_len = len(forecast)
-
-        cut = hist_len
-        if masked_tail_from is not None and 0 <= masked_tail_from < hist_len:
-            cut = masked_tail_from
-
-        if hist_len > 0:
-            hist_x = list(range(-(hist_len - 1), 1))
-            used_x = hist_x[:cut]
-            used_y = list(history[:cut])
-            masked_x = hist_x[cut:]
-            masked_y = list(history[cut:])
-
-            if used_x:
-                ax.axhline(
-                    _mean(used_y),
-                    color="darkgray",
-                    linestyle=":",
-                    linewidth=0.8,
-                    label="avg",
-                )
-                ax.plot(
-                    used_x,
-                    used_y,
-                    color="steelblue",
-                    linewidth=1.2,
-                    marker="o",
-                    markersize=2.5,
-                    label="history",
-                )
-
-            if masked_x:
-                # Bridge from last used point to the masked segment so the
-                # viewer can see it's contiguous in time.
-                if used_x:
-                    bridge_x = [used_x[-1], masked_x[0]]
-                    bridge_y = [used_y[-1], masked_y[0]]
-                    ax.plot(
-                        bridge_x,
-                        bridge_y,
-                        color="lightgrey",
-                        linewidth=0.8,
-                        linestyle="--",
-                    )
-                ax.plot(
-                    masked_x,
-                    masked_y,
-                    color="lightgrey",
-                    linewidth=0.8,
-                    linestyle="--",
-                    marker="o",
-                    markersize=2.5,
-                    markerfacecolor="lightgrey",
-                    markeredgecolor="lightgrey",
-                    label="OOS (masked)",
-                )
-
-        if fc_len > 0:
-            fc_x = list(range(1, fc_len + 1))
-            ax.plot(
-                fc_x,
-                list(forecast),
-                color="darkorange",
-                linewidth=1.2,
-                marker="o",
-                markersize=2.5,
-                label="forecast",
-            )
-
-        if hist_len > 0 and fc_len > 0:
+        _draw_history(ax, history, masked_tail_from)
+        _draw_forecast(ax, forecast)
+        if len(history) > 0 and len(forecast) > 0:
             ax.axvline(0.5, color="gray", linestyle="--", linewidth=0.7)
-
-        label = _forecast_daily_sales_label(forecast_daily_sales)
-        if label:
-            ax.text(
-                0.98,
-                0.96,
-                label,
-                transform=ax.transAxes,
-                ha="right",
-                va="top",
-                fontsize=6,
-                color="darkorange",
-            )
-
-        ax.set_title(_compact_title(title), fontsize=6, pad=1)
-        ax.tick_params(axis="both", labelsize=6)
-        _format_y_axis(ax, history=history, forecast=forecast)
-        ax.grid(True, alpha=0.25, linewidth=0.5)
-        if hist_len > 0 or fc_len > 0:
-            ax.legend(fontsize=6, loc="upper left", frameon=False)
-        ax.margins(x=0.02, y=0)
-
+        _draw_forecast_label(ax, forecast_daily_sales)
+        _style_axes(ax, title=title, history=history, forecast=forecast)
         fig.tight_layout(pad=0.3)
 
         buffer = io.BytesIO()
@@ -138,6 +50,113 @@ def render_sku_plot(
         plt.close(fig)
 
     return buffer.getvalue()
+
+
+def _split_history(
+    history: Sequence[float],
+    masked_tail_from: int | None,
+) -> tuple[list[int], list[float], list[int], list[float]]:
+    n = len(history)
+    cut = n
+    if masked_tail_from is not None and 0 <= masked_tail_from < n:
+        cut = masked_tail_from
+    x = list(range(-(n - 1), 1))
+    return x[:cut], list(history[:cut]), x[cut:], list(history[cut:])
+
+
+def _draw_history(
+    ax,
+    history: Sequence[float],
+    masked_tail_from: int | None,
+) -> None:
+    used_x, used_y, masked_x, masked_y = _split_history(history, masked_tail_from)
+
+    if used_x:
+        ax.axhline(
+            _mean(used_y),
+            color="darkgray",
+            linestyle=":",
+            linewidth=0.8,
+            label="avg",
+        )
+        ax.plot(
+            used_x,
+            used_y,
+            color="steelblue",
+            linewidth=1.2,
+            marker="o",
+            markersize=2.5,
+            label="history",
+        )
+
+    if masked_x:
+        if used_x:
+            ax.plot(
+                [used_x[-1], masked_x[0]],
+                [used_y[-1], masked_y[0]],
+                color="lightgrey",
+                linewidth=0.8,
+                linestyle="--",
+            )
+        ax.plot(
+            masked_x,
+            masked_y,
+            color="lightgrey",
+            linewidth=0.8,
+            linestyle="--",
+            marker="o",
+            markersize=2.5,
+            markerfacecolor="lightgrey",
+            markeredgecolor="lightgrey",
+            label="OOS (masked)",
+        )
+
+
+def _draw_forecast(ax, forecast: Sequence[float]) -> None:
+    if len(forecast) == 0:
+        return
+    fc_x = list(range(1, len(forecast) + 1))
+    ax.plot(
+        fc_x,
+        list(forecast),
+        color="darkorange",
+        linewidth=1.2,
+        marker="o",
+        markersize=2.5,
+        label="forecast",
+    )
+
+
+def _draw_forecast_label(ax, forecast_daily_sales: float | None) -> None:
+    label = _forecast_daily_sales_label(forecast_daily_sales)
+    if not label:
+        return
+    ax.text(
+        0.98,
+        0.96,
+        label,
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=6,
+        color="darkorange",
+    )
+
+
+def _style_axes(
+    ax,
+    *,
+    title: str,
+    history: Sequence[float],
+    forecast: Sequence[float],
+) -> None:
+    ax.set_title(_compact_title(title), fontsize=6, pad=1)
+    ax.tick_params(axis="both", labelsize=6)
+    _format_y_axis(ax, history=history, forecast=forecast)
+    ax.grid(True, alpha=0.25, linewidth=0.5)
+    if len(history) > 0 or len(forecast) > 0:
+        ax.legend(fontsize=6, loc="upper left", frameon=False)
+    ax.margins(x=0.02, y=0)
 
 
 def _compact_title(title: str) -> str:
