@@ -35,8 +35,8 @@ SALES_REQUIRED_COLUMNS = [
 ]
 
 TEMU_DAILY_REQUIRED_COLUMNS = [
-    "平台SKC_ID",
-    "平台SKU_ID",
+    "平台SKCID",
+    "平台SKUID",
 ]
 _TEMU_DAILY_COL_RE = re.compile(r"^\d+月\d+日销量$")
 
@@ -272,7 +272,7 @@ def parse_temu_daily_sales(
 ) -> dict[tuple[str, str], tuple[int, ...]]:
     """Parse Temu daily sales export.
 
-    Returns a mapping of (平台SKC_ID, 平台SKU_ID) → daily sales tuple (oldest → newest).
+    Returns a mapping of (平台SKCID, 平台SKUID) → daily sales tuple (oldest → newest).
     Rows sharing the same key (different shops) are summed.
     """
     all_cols = list(dict.fromkeys(column_name for row in rows for column_name in row))
@@ -281,8 +281,8 @@ def parse_temu_daily_sales(
 
     result: dict[tuple[str, str], tuple[int, ...]] = {}
     for row in rows:
-        skc_id = _clean_text(row.get("平台SKC_ID"))
-        sku_id = _clean_text(row.get("平台SKU_ID"))
+        skc_id = _clean_text(row.get("平台SKCID"))
+        sku_id = _clean_text(row.get("平台SKUID"))
         if not skc_id or not sku_id:
             continue
         key = (skc_id, sku_id)

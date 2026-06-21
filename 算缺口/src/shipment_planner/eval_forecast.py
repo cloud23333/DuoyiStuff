@@ -28,7 +28,6 @@ from .forecast_benchmark import BenchmarkRow, run_forecast_benchmark
 from .models import SalesRecord
 from .parsers import (
     SALES_REQUIRED_COLUMNS,
-    TEMU_DAILY_REQUIRED_COLUMNS,
     assert_required_columns,
     assert_temu_daily_sales_columns,
     assert_xlsx,
@@ -140,7 +139,6 @@ def main(argv: list[str] | None = None) -> int:
 
     temu_header, temu_rows = read_xlsx_table(temu_path)
     assert_temu_daily_sales_columns(temu_header, "Temu daily sales file")
-    assert_required_columns(temu_header, TEMU_DAILY_REQUIRED_COLUMNS, "Temu daily sales file")
     daily_sales_by_key = parse_temu_daily_sales(temu_rows)
 
     rows, skipped, summary = run_holdout_eval(
