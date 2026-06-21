@@ -42,7 +42,6 @@ class ForecastMetrics:
     effective_daily_sales: float = 0.0
     predictive_mean: float = 0.0
     dispersion: float = 0.0
-    chosen_quantile: float = 0.0
 
 
 @dataclass(slots=True)

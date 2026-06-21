@@ -1,10 +1,6 @@
 # src/shipment_planner/forecast_decision.py
 from __future__ import annotations
 
-import math
-
-from .forecast_distribution import DemandDistribution
-
 SERVICE_LEVEL_FLOOR = 0.40
 SERVICE_LEVEL_CEIL = 0.95
 SL_DEATH = 0.50
@@ -32,12 +28,3 @@ def resolve_service_level(
     else:
         level = SL_BASE
     return min(SERVICE_LEVEL_CEIL, max(SERVICE_LEVEL_FLOOR, level + offset))
-
-
-def gap_from_distribution(
-    distribution: DemandDistribution,
-    available_stock: float,
-    service_level: float,
-) -> int:
-    quantile = distribution.quantile(service_level)
-    return math.ceil(max(0.0, quantile - available_stock))

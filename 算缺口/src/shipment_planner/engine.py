@@ -18,7 +18,6 @@ from .forecast_level import (
     has_recent_drop,
     has_sustained_rise,
 )
-from .forecast_models import MODEL_CURRENT
 from .models import ForecastMetrics, KeyState, OrderLine, SalesRecord
 from .parsers import normalize_sku_code
 from .post_processing import (
@@ -35,8 +34,9 @@ from .post_processing import (
 from .summary import build_summary
 
 DEFAULT_BASE_STOCK_QTY = 2
-# Set by the bake-off (Task 7). One of: negbin_ewma / poisson_ewma / hurdle.
+# Demand estimator in use. One of: negbin_ewma / poisson_ewma / hurdle.
 SELECTED_ESTIMATOR = "hurdle"
+MODEL_CURRENT = "current"
 SMALL_CHANGE_KEEP_RATIO = 0.3
 FORECAST_STRATEGY_CONSERVATIVE = "保守"
 FORECAST_STRATEGY_NORMAL = "正常"
@@ -800,7 +800,6 @@ def _forecast_metrics(
         effective_daily_sales=effective_daily_sales,
         predictive_mean=predictive_mean,
         dispersion=distribution.variance,
-        chosen_quantile=service_level,
     )
 
 

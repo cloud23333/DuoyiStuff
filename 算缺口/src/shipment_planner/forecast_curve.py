@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import math
 
-FORECAST_STRATEGY_CONSERVATIVE = "保守"
-FORECAST_STRATEGY_NORMAL = "正常"
-FORECAST_STRATEGY_AGGRESSIVE = "激进"
+from .engine import (
+    FORECAST_STRATEGY_AGGRESSIVE,
+    FORECAST_STRATEGY_CONSERVATIVE,
+)
 
 
 def build_forecast_curve(

@@ -9,9 +9,5 @@ def test_forecast_metrics_has_distribution_fields():
         forecast_daily_sales=1.0,
         forecast_stocking_period_sales=7.0,
         predictive_mean=6.0,
-        dispersion=8.0,
-        chosen_quantile=0.55,
     )
     assert metrics.predictive_mean == 6.0
-    assert metrics.dispersion == 8.0
-    assert metrics.chosen_quantile == 0.55

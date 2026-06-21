@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .engine import compute_forecast_metrics
-from .forecast_benchmark import BenchmarkRow, run_forecast_benchmark
 from .models import SalesRecord
 from .parsers import (
     SALES_REQUIRED_COLUMNS,
@@ -70,11 +69,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--no-stockout-mask",
         action="store_true",
         help="Disable the OOS trailing-zero mask (evaluate raw history)",
-    )
-    parser.add_argument(
-        "--benchmark",
-        action="store_true",
-        help="Also compare current forecast against intermittent-demand benchmark models",
     )
     return parser
 
@@ -166,29 +160,6 @@ def main(argv: list[str] | None = None) -> int:
             f"  {strategy}: n={stats['count']} "
             f"WAPE={stats['wape']} MAE={stats['mae']} bias={stats['bias']}"
         )
-    if args.benchmark:
-        benchmark_rows, _, benchmark_summary = run_forecast_benchmark(
-            sales_records=sales_records,
-            daily_sales_by_key=daily_sales_by_key,
-            holdout_days=args.holdout_days,
-            min_train_days=args.min_train_days,
-            apply_stockout_mask=not args.no_stockout_mask,
-        )
-        benchmark_detail_path = out_dir / "forecast_benchmark_detail.csv"
-        benchmark_summary_path = out_dir / "forecast_benchmark_summary.json"
-        _write_benchmark_detail_csv(benchmark_detail_path, benchmark_rows)
-        benchmark_summary_path.write_text(
-            json.dumps(benchmark_summary, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        print("Benchmark by model:")
-        for model, stats in benchmark_summary["by_model"].items():
-            print(
-                f"  {model}: n={stats['count']} "
-                f"WAPE={stats['wape']} MAE={stats['mae']} bias={stats['bias']}"
-            )
-        print(f"         {benchmark_detail_path}")
-        print(f"         {benchmark_summary_path}")
     print(f"Outputs: {detail_path}")
     print(f"         {summary_path}")
     return 0
@@ -305,39 +276,6 @@ def _write_detail_csv(path: Path, rows: Sequence[EvalRow]) -> None:
                     "skc": row.skc,
                     "skuid": row.skuid,
                     "strategy": row.strategy,
-                    "train_days": row.train_days,
-                    "holdout_days": row.holdout_days,
-                    "forecast_daily_sales": row.forecast_daily_sales,
-                    "forecast_holdout_total": row.forecast_holdout_total,
-                    "actual_holdout_total": row.actual_holdout_total,
-                    "abs_error": row.abs_error,
-                    "signed_error": row.signed_error,
-                }
-            )
-
-
-def _write_benchmark_detail_csv(path: Path, rows: Sequence[BenchmarkRow]) -> None:
-    fieldnames = [
-        "skc",
-        "skuid",
-        "model",
-        "train_days",
-        "holdout_days",
-        "forecast_daily_sales",
-        "forecast_holdout_total",
-        "actual_holdout_total",
-        "abs_error",
-        "signed_error",
-    ]
-    with path.open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "skc": row.skc,
-                    "skuid": row.skuid,
-                    "model": row.model,
                     "train_days": row.train_days,
                     "holdout_days": row.holdout_days,
                     "forecast_daily_sales": row.forecast_daily_sales,

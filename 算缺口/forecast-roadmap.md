@@ -52,7 +52,7 @@
 
 ## 阶段 3：点估计 → 分布决策（高成本，1–2 周）✅ 已落地（2026-06-01）
 
-把"预测日均 × 备货天数"升级成真正的库存决策。落地实现见 `forecast_distribution.py` / `forecast_decision.py` / `forecast_level.py` 与 `forecast_bakeoff.py`。以下为原始设计条目（均已实现）。
+把"预测日均 × 备货天数"升级成真正的库存决策。落地实现见 `forecast_distribution.py` / `forecast_decision.py` / `forecast_level.py`。以下为原始设计条目（均已实现）。
 
 ### 3.1 输出预测分布
 - 用 Poisson 或 NegBin 拟合日销序列
