@@ -34,11 +34,31 @@ SALES_REQUIRED_COLUMNS = [
     "平台商品库存信息-平台待收货库存",
 ]
 
-TEMU_DAILY_REQUIRED_COLUMNS = [
-    "平台SKCID",
-    "平台SKUID",
-]
+TEMU_DAILY_SKC_ALIASES = ("平台SKCID", "平台SKC_ID")
+TEMU_DAILY_SKU_ALIASES = ("平台SKUID", "平台SKU_ID")
 _TEMU_DAILY_COL_RE = re.compile(r"^\d+月\d+日销量$")
+
+
+def _first_present(header_set: set[str], aliases: tuple[str, ...]) -> str | None:
+    for name in aliases:
+        if name in header_set:
+            return name
+    return None
+
+
+def temu_daily_has_id_columns(header: list[str]) -> bool:
+    header_set = set(header)
+    return (
+        _first_present(header_set, TEMU_DAILY_SKC_ALIASES) is not None
+        and _first_present(header_set, TEMU_DAILY_SKU_ALIASES) is not None
+    )
+
+
+def _temu_id_value(row: dict[str, str], aliases: tuple[str, ...]) -> str:
+    for name in aliases:
+        if name in row:
+            return _clean_text(row[name])
+    return ""
 
 TAG_SPLIT_RE = re.compile(r"[，,]")
 IN_PROGRESS_STATUS = "发货中"
@@ -262,7 +282,10 @@ def temu_daily_sales_columns(header: list[str]) -> list[str]:
 
 
 def assert_temu_daily_sales_columns(header: list[str], file_label: str) -> None:
-    assert_required_columns(header, TEMU_DAILY_REQUIRED_COLUMNS, file_label)
+    if not temu_daily_has_id_columns(header):
+        skc = "/".join(TEMU_DAILY_SKC_ALIASES)
+        sku = "/".join(TEMU_DAILY_SKU_ALIASES)
+        raise ValueError(f"Missing required columns in {file_label}: {skc}, {sku}")
     if not temu_daily_sales_columns(header):
         raise ValueError(f"{file_label} has no daily sales columns")
 
@@ -281,8 +304,8 @@ def parse_temu_daily_sales(
 
     result: dict[tuple[str, str], tuple[int, ...]] = {}
     for row in rows:
-        skc_id = _clean_text(row.get("平台SKCID"))
-        sku_id = _clean_text(row.get("平台SKUID"))
+        skc_id = _temu_id_value(row, TEMU_DAILY_SKC_ALIASES)
+        sku_id = _temu_id_value(row, TEMU_DAILY_SKU_ALIASES)
         if not skc_id or not sku_id:
             continue
         key = (skc_id, sku_id)

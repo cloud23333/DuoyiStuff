@@ -16,7 +16,6 @@ from .eval_forecast import (
 from .parsers import (
     ORDER_REQUIRED_COLUMNS,
     SALES_REQUIRED_COLUMNS,
-    TEMU_DAILY_REQUIRED_COLUMNS,
     assert_required_columns,
     assert_temu_daily_sales_columns,
     assert_xlsx,
@@ -24,6 +23,7 @@ from .parsers import (
     parse_orders,
     parse_sales,
     parse_temu_daily_sales,
+    temu_daily_has_id_columns,
     temu_daily_sales_columns,
 )
 from .reports import export_reports
@@ -297,10 +297,7 @@ def _try_auto_detect_temu(
         header = _cached_header(candidate, header_cache)
         if header is None:
             continue
-        if (
-            _contains_all_required_columns(header, TEMU_DAILY_REQUIRED_COLUMNS)
-            and temu_daily_sales_columns(header)
-        ):
+        if temu_daily_has_id_columns(header) and temu_daily_sales_columns(header):
             return candidate
     return None
 

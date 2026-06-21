@@ -13,9 +13,11 @@ from shipment_planner.constraints import DEFAULT_CONSTRAINTS_FILENAME
 from shipment_planner.parsers import (
     ORDER_REQUIRED_COLUMNS,
     SALES_REQUIRED_COLUMNS,
-    TEMU_DAILY_REQUIRED_COLUMNS,
+    TEMU_DAILY_SKC_ALIASES,
+    TEMU_DAILY_SKU_ALIASES,
     describe_required_column,
     missing_required_columns,
+    temu_daily_has_id_columns,
     temu_daily_sales_columns,
 )
 from shipment_planner.xlsx_reader import read_xlsx_table
@@ -96,7 +98,7 @@ def run_planner(
     input_specs = (
         (orders, ORDER_REQUIRED_COLUMNS, "订单文件"),
         (sales, SALES_REQUIRED_COLUMNS, "销售文件"),
-        (temu_sales, TEMU_DAILY_REQUIRED_COLUMNS, "Temu每日销量文件"),
+        (temu_sales, [], "Temu每日销量文件"),
     )
 
     for file_path, _, label in input_specs:
@@ -187,7 +189,10 @@ def _assert_required_columns(header: list[str], required: list[str], label: str)
 
 
 def _assert_temu_daily_columns(header: list[str]) -> None:
-    _assert_required_columns(header, TEMU_DAILY_REQUIRED_COLUMNS, "Temu每日销量文件")
+    if not temu_daily_has_id_columns(header):
+        skc = "/".join(TEMU_DAILY_SKC_ALIASES)
+        sku = "/".join(TEMU_DAILY_SKU_ALIASES)
+        raise ValueError(f"Temu每日销量文件缺少必填列：{skc}、{sku}。")
     if not temu_daily_sales_columns(header):
         raise ValueError("Temu每日销量文件缺少日期销量列。")
 

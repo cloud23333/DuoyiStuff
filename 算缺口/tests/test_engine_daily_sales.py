@@ -4,7 +4,36 @@ from datetime import datetime
 
 from shipment_planner.engine import build_recommendations
 from shipment_planner.models import OrderLine, SalesRecord
+import pytest
+
+from shipment_planner.parsers import (
+    assert_temu_daily_sales_columns,
+    parse_temu_daily_sales,
+)
 from shipment_planner.summary import build_summary
+
+
+def test_parse_temu_daily_sales_accepts_underscore_headers():
+    rows = [{"平台SKC_ID": "A", "平台SKU_ID": "1", "06月01日销量": "3", "06月02日销量": "5"}]
+    result = parse_temu_daily_sales(rows)
+    assert result[("A", "1")] == (3, 5)
+
+
+def test_parse_temu_daily_sales_accepts_legacy_headers():
+    rows = [{"平台SKCID": "B", "平台SKUID": "2", "06月01日销量": "1", "06月02日销量": "2"}]
+    result = parse_temu_daily_sales(rows)
+    assert result[("B", "2")] == (1, 2)
+
+
+def test_parse_temu_daily_sales_prefers_legacy_when_both_present():
+    rows = [{"平台SKCID": "L", "平台SKC_ID": "U", "平台SKUID": "9", "平台SKU_ID": "8", "06月01日销量": "4"}]
+    result = parse_temu_daily_sales(rows)
+    assert result == {("L", "9"): (4,)}
+
+
+def test_assert_temu_daily_sales_columns_raises_when_id_missing():
+    with pytest.raises(ValueError):
+        assert_temu_daily_sales_columns(["商品名称", "06月01日销量"], "Temu daily sales file")
 
 
 def _order_line(
