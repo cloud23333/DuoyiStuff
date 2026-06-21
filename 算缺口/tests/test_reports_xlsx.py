@@ -20,7 +20,7 @@ def test_recommendation_xlsx_is_execution_first(tmp_path):
     worksheet = workbook["发货建议明细"]
     headers = [worksheet.cell(row=1, column=col).value for col in range(1, worksheet.max_column + 1)]
 
-    assert headers[:10] == [
+    assert headers[:9] == [
         "订单号",
         "商品定位",
         "订单行数量",
@@ -28,9 +28,8 @@ def test_recommendation_xlsx_is_execution_first(tmp_path):
         "SKU建议",
         "订单建议",
         "处理提示",
-        "店铺款式编码",
-        "店铺商品编码",
-        "订单商品编码",
+        "缺口",
+        "可用库存",
     ]
     assert headers.index("建议发货量") == 3
     assert worksheet.freeze_panes == "E2"
@@ -86,6 +85,13 @@ def test_recommendation_xlsx_has_readability_formatting(tmp_path):
     assert worksheet.cell(row=2, column=columns["建议发货量"]).border.left.style == "thin"
     assert worksheet.column_dimensions[get_column_letter(columns["销量与预测曲线"])].width == 46.0
     assert len(worksheet.conditional_formatting) > 0
+
+    detail_dim = worksheet.column_dimensions[get_column_letter(columns["平台仓内库存"])]
+    assert detail_dim.outlineLevel == 1
+    assert detail_dim.hidden is True
+    core_dim = worksheet.column_dimensions[get_column_letter(columns["建议发货量"])]
+    assert core_dim.outlineLevel == 0
+    assert core_dim.hidden is False
 
 
 def test_recommendation_plot_title_includes_forecast_model(monkeypatch):
