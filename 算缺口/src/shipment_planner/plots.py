@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import math
+import statistics
 from collections.abc import Sequence
 
 import matplotlib
@@ -82,7 +83,7 @@ def _draw_history(
 
     if used_x:
         ax.axhline(
-            _mean(used_y),
+            statistics.fmean(used_y),
             color="darkgray",
             linestyle=":",
             linewidth=0.8,
@@ -225,10 +226,6 @@ def _shorten_middle(value: str, max_chars: int) -> str:
     left_chars = (max_chars - 3) // 2
     right_chars = max_chars - 3 - left_chars
     return f"{value[:left_chars]}...{value[-right_chars:]}"
-
-
-def _mean(values: Sequence[float]) -> float:
-    return sum(float(value) for value in values) / len(values)
 
 
 def _forecast_daily_sales_label(value: float | None) -> str:

@@ -28,7 +28,6 @@ def _localize_recommendation_row(row: dict[str, object]) -> dict[str, object]:
     return _localize_row(
         row=row,
         fields=RECOMMENDATION_FIELDS,
-        default_value="",
         value_mapper=_localize_recommendation_value,
         derived_value_mapper=_recommendation_derived_value,
     )
@@ -38,7 +37,6 @@ def _localize_quality_row(row: dict[str, object]) -> dict[str, object]:
     return _localize_row(
         row=row,
         fields=QUALITY_FIELDS,
-        default_value="",
         value_mapper=_localize_quality_value,
     )
 
@@ -47,7 +45,6 @@ def _localize_row(
     *,
     row: dict[str, object],
     fields: Sequence[tuple[str, str]],
-    default_value: object,
     value_mapper: Callable[[str, object], object],
     derived_value_mapper: Callable[[str, dict[str, object]], object] | None = None,
 ) -> dict[str, object]:
@@ -59,7 +56,7 @@ def _localize_row(
         if source.startswith("__") and derived_value_mapper is not None:
             localized[target] = derived_value_mapper(source, row)
             continue
-        localized[target] = value_mapper(source, row.get(source, default_value))
+        localized[target] = value_mapper(source, row.get(source, ""))
     return localized
 
 

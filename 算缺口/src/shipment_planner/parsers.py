@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from collections import defaultdict
 from datetime import datetime
 import functools
 import re
 from pathlib import Path
-from typing import TypeVar
 
 from .models import OrderLine, SalesRecord
 
@@ -36,13 +34,12 @@ SALES_REQUIRED_COLUMNS = [
 TEMU_DAILY_SKC_COLUMN = "平台SKC_ID"
 TEMU_DAILY_SKU_COLUMN = "平台SKU_ID"
 TEMU_DAILY_REQUIRED_COLUMNS = [TEMU_DAILY_SKC_COLUMN, TEMU_DAILY_SKU_COLUMN]
-_TEMU_DAILY_COL_RE = re.compile(r"^\d+月\d+日销量$")
+_TEMU_DAILY_COL_RE = re.compile(r"^(\d+)月(\d+)日销量$")
 
 TAG_SPLIT_RE = re.compile(r"[，,]")
 IN_PROGRESS_STATUS = "发货中"
 SHORTAGE_STATUS = "缺货"
 ORDER_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
-NumberT = TypeVar("NumberT", int, float)
 
 
 def _clean_text(value: str | None) -> str:
@@ -80,7 +77,6 @@ def parse_orders(rows: list[dict[str, str]]) -> tuple[list[OrderLine], dict[tupl
         product_code = _clean_text(row_get("商品编码"))
         qty = parse_quantity_int(
             row_get("数量"),
-            field_name="数量",
             row_number=row_number,
         )
         status = _clean_text(row_get("状态"))
@@ -130,21 +126,22 @@ def parse_sales(rows: list[dict[str, str]]) -> list[SalesRecord]:
 
 
 def parse_float(value: str | None) -> float:
-    return _parse_number_or_default(value, parser=float, default=0.0)
+    try:
+        return float(_normalize_number_text(value))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def parse_int(value: str | None) -> int:
-    return _parse_number_or_default(
-        value,
-        parser=_parse_int_from_number_text,
-        default=0,
-    )
+    try:
+        return int(float(_normalize_number_text(value)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def parse_quantity_int(
     value: str | None,
     *,
-    field_name: str,
     row_number: int,
 ) -> int:
     text = _normalize_number_text(value)
@@ -155,16 +152,16 @@ def parse_quantity_int(
         number = float(text)
     except ValueError as exc:
         raise ValueError(
-            f"Invalid {field_name} at orders row {row_number}: {value!r} is not a number"
+            f"Invalid 数量 at orders row {row_number}: {value!r} is not a number"
         ) from exc
 
     if number < 0:
         raise ValueError(
-            f"Invalid {field_name} at orders row {row_number}: value must be >= 0"
+            f"Invalid 数量 at orders row {row_number}: value must be >= 0"
         )
     if not number.is_integer():
         raise ValueError(
-            f"Invalid {field_name} at orders row {row_number}: {value!r} is not an integer"
+            f"Invalid 数量 at orders row {row_number}: {value!r} is not an integer"
         )
 
     return int(number)
@@ -178,8 +175,6 @@ def parse_stocking_days(value: str | None) -> float:
     parts = [part for part in normalized.split("+") if part]
     if not parts:
         return 0.0
-    if len(parts) == 1:
-        return parse_float(parts[0])
     return sum(parse_float(part) for part in parts)
 
 
@@ -218,27 +213,8 @@ def _normalize_plus_text(value: str | None) -> str:
     return text.replace(" ", "")
 
 
-def _parse_int_from_number_text(text: str) -> int:
-    return int(float(text))
-
-
-def _parse_number_or_default(
-    value: str | None,
-    *,
-    parser: Callable[[str], NumberT],
-    default: NumberT,
-) -> NumberT:
-    text = _normalize_number_text(value)
-    if not text:
-        return default
-    try:
-        return parser(text)
-    except ValueError:
-        return default
-
-
 def _temu_date_sort_key(col: str) -> tuple[int, int]:
-    m = re.match(r"^(\d+)月(\d+)日销量$", col)
+    m = _TEMU_DAILY_COL_RE.match(col)
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 

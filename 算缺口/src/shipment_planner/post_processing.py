@@ -399,17 +399,13 @@ def assign_order_intercept_warnings(
         and order_has_intercept.get(order_id, False)
     }
 
-    flagged_lines = 0
     for row in recommendations:
         order_id = str(row["internal_order_id"])
         is_intercepted_order = order_id in intercepted_orders
         row["order_intercept_warning"] = "yes" if is_intercepted_order else "no"
-        if is_intercepted_order:
-            flagged_lines += 1
 
     return {
         "intercepted_orders": len(intercepted_orders),
-        "intercepted_order_lines": flagged_lines,
     }
 
 

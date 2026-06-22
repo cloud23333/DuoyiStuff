@@ -107,8 +107,7 @@ def ewma(values: Sequence[float], half_life: float) -> float:
 def recent_mean(values: Sequence[float], *, days: int) -> float:
     if days <= 0 or not values:
         return 0.0
-    recent = values[-days:]
-    return statistics.fmean(recent) if recent else 0.0
+    return statistics.fmean(values[-days:])
 
 
 def clean_isolated_spikes(values: Sequence[float]) -> tuple[list[float], bool]:

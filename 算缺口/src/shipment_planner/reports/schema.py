@@ -253,8 +253,6 @@ INT_FORMAT_FIELDS = {
     "min_order_ship_qty_threshold",
 }
 
-FORECAST_ERROR_FIELDS = {"sku_forecast_abs_error", "sku_forecast_signed_error"}
-
 SUMMARY_INT_FORMAT_FIELDS = {
     "order_lines",
     "sales_rows",

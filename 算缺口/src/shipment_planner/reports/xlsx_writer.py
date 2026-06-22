@@ -109,7 +109,7 @@ def _style_recommendations_worksheet(
 
     for col_idx, (source, name) in enumerate(fields, start=1):
         header = worksheet.cell(row=1, column=col_idx)
-        header.fill = _header_fill_for_source(source)
+        header.fill = HEADER_GROUP_FILLS[HEADER_FILL_BY_SOURCE.get(source, "diagnostic")]
         header.font = HEADER_FONT
         header.border = GRID_BORDER
         header.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -119,7 +119,11 @@ def _style_recommendations_worksheet(
     for row_idx in range(2, max_row + 1):
         for col_idx, (source, name) in enumerate(fields, start=1):
             cell = worksheet.cell(row=row_idx, column=col_idx)
-            cell.alignment = _cell_alignment(source, name)
+            cell.alignment = Alignment(
+                horizontal="center",
+                vertical="center",
+                wrap_text=name in TEXT_WRAP_COLUMNS,
+            )
             cell.border = GRID_BORDER
             if source in INT_FORMAT_FIELDS:
                 cell.number_format = INTEGER_FORMAT
@@ -131,18 +135,6 @@ def _style_recommendations_worksheet(
     _apply_column_widths(worksheet, fields)
     _apply_column_grouping(worksheet)
     _apply_recommendation_conditional_formatting(worksheet, fields)
-
-
-def _header_fill_for_source(source: str):
-    return HEADER_GROUP_FILLS[HEADER_FILL_BY_SOURCE.get(source, "diagnostic")]
-
-
-def _cell_alignment(source: str, name: str) -> Alignment:
-    return Alignment(
-        horizontal="center",
-        vertical="center",
-        wrap_text=name in TEXT_WRAP_COLUMNS,
-    )
 
 
 def _apply_column_widths(

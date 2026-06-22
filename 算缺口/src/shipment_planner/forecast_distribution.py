@@ -90,13 +90,8 @@ def _negbin_quantile(mean: float, variance: float, probability: float) -> float:
     return float(k)
 
 
-_SHORT_HALF_LIFE = 2.0
 _LONG_HALF_LIFE = 5.0
 _RECENT_DAYS = 5
-# On a confirmed collapse, pin dispersion to the mean (Poisson): the floor at
-# `level` and this cap collapse daily_var to exactly `level`, so the tail can't
-# prop up the gap on a dying SKU.
-_DROP_VAR_TO_MEAN_RATIO = 1.0
 
 
 def _normalize(values: Sequence[float]) -> list[float]:
@@ -123,7 +118,7 @@ def negbin_ewma_distribution(
     raw_mean = weighted_mean(base, _LONG_HALF_LIFE)
     daily_var = max(weighted_variance(base, _LONG_HALF_LIFE, mean=raw_mean), level)
     if recent_drop:
-        daily_var = min(daily_var, level * _DROP_VAR_TO_MEAN_RATIO)
+        daily_var = min(daily_var, level)
     return DemandDistribution(
         horizon=horizon, mean=level * horizon, variance=daily_var * horizon
     )

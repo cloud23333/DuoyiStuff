@@ -1,22 +1,22 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/main.py` is the CLI entry point for shipment planning runs.
+- `src/shipment_planner/cli.py` is the CLI entry point for shipment planning runs (run: `PYTHONPATH=src python3 -m shipment_planner.cli`).
 - Core business logic lives in `src/shipment_planner/`:
   - `cli.py` (argument parsing and orchestration)
   - `parsers.py` and `xlsx_reader.py` (input validation/parsing)
   - `engine.py` (allocation and recommendation logic)
   - `constraints.py` and `reports.py` (rule loading and exports)
-- UI code lives in `src/planner_ui/` with launcher `src/ui_main.py`.
+- UI code lives in `src/planner_ui/` with launcher `src/planner_ui/__main__.py` (run: `PYTHONPATH=src python3 -m planner_ui`).
 - Runtime data paths are `data/input/` (xlsx/json inputs) and `data/output/` (generated csv/json reports).
 - Packaging assets are `build.bat` and `发货建议工具.spec`; binaries are emitted to `dist/`.
 
 ## Build, Test, and Development Commands
-- `python3 src/main.py --input-dir data/input --out-dir data/output`  
+- `PYTHONPATH=src python3 -m shipment_planner.cli --input-dir data/input --out-dir data/output`  
   Runs the planner with auto-detected orders/sales files.
-- `python3 src/main.py --orders data/input/<orders>.xlsx --sales data/input/<sales>.xlsx --out-dir data/output`  
+- `PYTHONPATH=src python3 -m shipment_planner.cli --orders data/input/<orders>.xlsx --sales data/input/<sales>.xlsx --out-dir data/output`  
   Runs with pinned input files.
-- `python3 src/ui_main.py` or `PYTHONPATH=src python3 -m planner_ui`  
+- `PYTHONPATH=src python3 -m planner_ui`  
   Starts the PyQt6 desktop UI.
 - `python3 -m compileall src`  
   Fast syntax validation before opening a PR.

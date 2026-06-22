@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any
 
 from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication
@@ -34,52 +33,19 @@ from planner_ui.workflow import (
 )
 from shipment_planner.engine import DEFAULT_BASE_STOCK_QTY
 
-CompletionDialogAction = Literal["open_recommendation", "open_output_dir"]
-
-
-@dataclass(slots=True)
-class RunRequest:
-    orders_path: Path
-    sales_path: Path
-    output_dir: Path
-    service_level_offset: float
-    base_stock_qty: int
-    temu_sales_path: Path
-
 
 class PlannerRunWorker(QObject):
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(
-        self,
-        *,
-        orders_path: Path,
-        sales_path: Path,
-        output_dir: Path,
-        service_level_offset: float,
-        base_stock_qty: int,
-        temu_sales_path: Path,
-    ) -> None:
+    def __init__(self, run_kwargs: dict[str, Any]) -> None:
         super().__init__()
-        self._orders_path = orders_path
-        self._sales_path = sales_path
-        self._output_dir = output_dir
-        self._service_level_offset = service_level_offset
-        self._base_stock_qty = base_stock_qty
-        self._temu_sales_path = temu_sales_path
+        self._run_kwargs = run_kwargs
 
     @pyqtSlot()
     def run(self) -> None:
         try:
-            result = run_planner(
-                orders_path=self._orders_path,
-                sales_path=self._sales_path,
-                output_dir=self._output_dir,
-                service_level_offset=self._service_level_offset,
-                base_stock_qty=self._base_stock_qty,
-                temu_sales_path=self._temu_sales_path,
-            )
+            result = run_planner(**self._run_kwargs)
         except Exception as exc:  # pragma: no cover - UI error channel
             self.failed.emit(str(exc))
             return
@@ -437,10 +403,33 @@ class PlannerWindow(QMainWindow):
         self._append_log(f"输出文件：{result_obj.summary_path}")
         self._set_status("运行完成，结果已写入输出子目录。")
 
-        action = _ask_completion_dialog_action(self, result_obj)
-        if action == "open_recommendation":
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setWindowTitle("运行完成")
+        dialog.setText("输出文件已生成：")
+        dialog.setInformativeText(
+            "\n".join(
+                [
+                    f"目录：{result_obj.output_dir}",
+                    str(result_obj.recommendation_path),
+                    str(result_obj.quality_path),
+                    str(result_obj.summary_path),
+                ]
+            )
+        )
+        open_recommendation_button = dialog.addButton(
+            "打开明细表", QMessageBox.ButtonRole.ActionRole
+        )
+        open_output_dir_button = dialog.addButton(
+            "打开输出目录", QMessageBox.ButtonRole.ActionRole
+        )
+        dialog.addButton(QMessageBox.StandardButton.Ok)
+        dialog.exec()
+
+        clicked_button = dialog.clickedButton()
+        if clicked_button == open_recommendation_button:
             self._open_generated_path(result_obj.recommendation_path, "明细表")
-        elif action == "open_output_dir":
+        elif clicked_button == open_output_dir_button:
             self._open_generated_path(result_obj.output_dir, "输出目录")
 
     def _open_generated_path(self, path: Path, label: str) -> None:
@@ -510,7 +499,7 @@ class PlannerWindow(QMainWindow):
         cursor.movePosition(cursor.MoveOperation.End)
         self.log_text_edit.setTextCursor(cursor)
 
-    def _collect_run_request(self) -> RunRequest | None:
+    def _collect_run_request(self) -> dict[str, Any] | None:
         if not self._constraints_ready:
             message = "约束配置未就绪，请点击“打开配置目录”修复后再运行。"
             self._set_status(message, error=True)
@@ -529,44 +518,37 @@ class PlannerWindow(QMainWindow):
             )
             return None
 
-        run_request = RunRequest(
-            orders_path=Path(orders_text),
-            sales_path=Path(sales_text),
-            output_dir=Path(output_text),
-            service_level_offset=float(self.service_level_offset_spin.value()),
-            base_stock_qty=int(self.base_stock_qty_spin.value()),
-            temu_sales_path=Path(temu_text),
-        )
+        run_kwargs: dict[str, Any] = {
+            "orders_path": Path(orders_text),
+            "sales_path": Path(sales_text),
+            "output_dir": Path(output_text),
+            "service_level_offset": float(self.service_level_offset_spin.value()),
+            "base_stock_qty": int(self.base_stock_qty_spin.value()),
+            "temu_sales_path": Path(temu_text),
+        }
 
         validation_error = self._validate_run_inputs(
-            orders_path=run_request.orders_path,
-            sales_path=run_request.sales_path,
-            temu_sales_path=run_request.temu_sales_path,
-            output_dir=run_request.output_dir,
-            service_level_offset=run_request.service_level_offset,
-            base_stock_qty=run_request.base_stock_qty,
+            orders_path=run_kwargs["orders_path"],
+            sales_path=run_kwargs["sales_path"],
+            temu_sales_path=run_kwargs["temu_sales_path"],
+            output_dir=run_kwargs["output_dir"],
+            service_level_offset=run_kwargs["service_level_offset"],
+            base_stock_qty=run_kwargs["base_stock_qty"],
         )
         if validation_error is not None:
             self._set_status(validation_error, error=True)
             QMessageBox.warning(self, "输入无效", validation_error)
             return None
 
-        return run_request
+        return run_kwargs
 
-    def _start_run(self, run_request: RunRequest) -> None:
+    def _start_run(self, run_kwargs: dict[str, Any]) -> None:
         self._set_running_state(True)
         self._set_status("正在运行，请稍候...")
         self._append_log("开始运行发货建议计算...")
 
         self._run_thread = QThread(self)
-        self._run_worker = PlannerRunWorker(
-            orders_path=run_request.orders_path,
-            sales_path=run_request.sales_path,
-            output_dir=run_request.output_dir,
-            service_level_offset=run_request.service_level_offset,
-            base_stock_qty=run_request.base_stock_qty,
-            temu_sales_path=run_request.temu_sales_path,
-        )
+        self._run_worker = PlannerRunWorker(run_kwargs)
         self._run_worker.moveToThread(self._run_thread)
 
         self._run_thread.started.connect(self._run_worker.run)
@@ -662,19 +644,15 @@ class PlannerWindow(QMainWindow):
         if not orders_text or not sales_text or not temu_text or not output_text:
             return False
 
-        orders_path = Path(orders_text)
-        sales_path = Path(sales_text)
-        temu_path = Path(temu_text)
-        output_path = Path(output_text)
-        return (
-            orders_path.is_file()
-            and sales_path.is_file()
-            and temu_path.is_file()
-            and orders_path.suffix.lower() == ".xlsx"
-            and sales_path.suffix.lower() == ".xlsx"
-            and temu_path.suffix.lower() == ".xlsx"
-            and (output_path.is_dir() or not output_path.exists())
+        validation_error = self._validate_run_inputs(
+            orders_path=Path(orders_text),
+            sales_path=Path(sales_text),
+            temu_sales_path=Path(temu_text),
+            output_dir=Path(output_text),
+            service_level_offset=float(self.service_level_offset_spin.value()),
+            base_stock_qty=int(self.base_stock_qty_spin.value()),
         )
+        return validation_error is None
 
     def _remember_dialog_dir(self, path: Path) -> None:
         candidate = path if path.is_dir() else path.parent
@@ -725,41 +703,6 @@ def _monospace_font() -> QFont:
     font = QFont("Consolas")
     font.setStyleHint(QFont.StyleHint.Monospace)
     return font
-
-
-def _ask_completion_dialog_action(
-    parent: QWidget | None,
-    result_obj: PlannerRunResult,
-) -> CompletionDialogAction | None:
-    dialog = QMessageBox(parent)
-    dialog.setIcon(QMessageBox.Icon.Information)
-    dialog.setWindowTitle("运行完成")
-    dialog.setText("输出文件已生成：")
-    dialog.setInformativeText(
-        "\n".join(
-            [
-                f"目录：{result_obj.output_dir}",
-                str(result_obj.recommendation_path),
-                str(result_obj.quality_path),
-                str(result_obj.summary_path),
-            ]
-        )
-    )
-    open_recommendation_button = dialog.addButton(
-        "打开明细表", QMessageBox.ButtonRole.ActionRole
-    )
-    open_output_dir_button = dialog.addButton(
-        "打开输出目录", QMessageBox.ButtonRole.ActionRole
-    )
-    dialog.addButton(QMessageBox.StandardButton.Ok)
-    dialog.exec()
-
-    clicked_button = dialog.clickedButton()
-    if clicked_button == open_recommendation_button:
-        return "open_recommendation"
-    if clicked_button == open_output_dir_button:
-        return "open_output_dir"
-    return None
 
 
 def _app_stylesheet() -> str:

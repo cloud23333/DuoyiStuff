@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['src\\ui_main.py'],
+    ['src\\planner_ui\\__main__.py'],
     pathex=['src'],
     binaries=[],
     datas=[],

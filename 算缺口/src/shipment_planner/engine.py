@@ -8,11 +8,7 @@ from dataclasses import dataclass
 
 from .allocation import allocate_recommendation_quantities
 from .forecast_decision import resolve_service_level
-from .forecast_distribution import (
-    hurdle_distribution,
-    negbin_ewma_distribution,
-    poisson_ewma_distribution,
-)
+from .forecast_distribution import hurdle_distribution
 from .forecast_level import (
     clean_isolated_spikes,
     has_recent_drop,
@@ -26,7 +22,6 @@ from .post_processing import (
     assign_order_intercept_warnings,
     decision_reason,
     flag_min_order_ship_qty,
-    line_change_ratio,
     refresh_key_recommended_totals,
     refresh_line_decision_reasons,
     round_qty,
@@ -34,9 +29,8 @@ from .post_processing import (
 from .summary import build_summary
 
 DEFAULT_BASE_STOCK_QTY = 2
-# Demand estimator in use. One of: negbin_ewma / poisson_ewma / hurdle.
-SELECTED_ESTIMATOR = "hurdle"
-MODEL_CURRENT = "current"
+FORECAST_MODEL_HURDLE = "hurdle"
+FORECAST_MODEL_CURRENT = "current"
 SMALL_CHANGE_KEEP_RATIO = 0.3
 FORECAST_STRATEGY_CONSERVATIVE = "保守"
 FORECAST_STRATEGY_NORMAL = "正常"
@@ -65,12 +59,6 @@ INTERMITTENT_ZERO_RATIO = 0.5
 STABLE_VOLATILITY_THRESHOLD = 0.8
 # Service level used by the single-day big-order base-stock fallback.
 SERVICE_LEVEL_CONSERVATIVE = 0.60
-
-_ESTIMATORS = {
-    "negbin_ewma": negbin_ewma_distribution,
-    "poisson_ewma": poisson_ewma_distribution,
-    "hurdle": hurdle_distribution,
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,11 +212,6 @@ def build_recommendations(
                     "yes" if base_stock_triggered else "no"
                 ),
                 "recommended_ship": suggested_qty,
-                "recommended_ship_before_small_change_rule": suggested_qty,
-                "small_change_ratio_before_rule": round_qty(
-                    line_change_ratio(line.quantity, suggested_qty)
-                ),
-                "small_change_keep_warning": "no",
                 "key_recommended_total": key_recommended_total,
                 "decision_reason": decision_reason(line.quantity, suggested_qty),
                 "order_decision_reason": "",
@@ -672,7 +655,7 @@ def _single_day_big_order_base_stock_metrics(
             stockout_tail=stockout_tail,
         ),
         service_level=SERVICE_LEVEL_CONSERVATIVE,
-        forecast_model=MODEL_CURRENT,
+        forecast_model=FORECAST_MODEL_CURRENT,
         effective_daily_sales=0.0,
     )
 
@@ -757,8 +740,7 @@ def _forecast_metrics(
     )
 
     horizon = max(1, math.ceil(stocking_days)) if stocking_days > 0 else 1
-    estimator = _ESTIMATORS[SELECTED_ESTIMATOR]
-    distribution = estimator(values, horizon=horizon, recent_drop=recent_drop)
+    distribution = hurdle_distribution(values, horizon=horizon, recent_drop=recent_drop)
 
     service_level = resolve_service_level(
         recent_drop=recent_drop,
@@ -788,7 +770,7 @@ def _forecast_metrics(
         demand_profile=demand_profile,
         anomaly_flags=anomaly_flags,
         service_level=service_level,
-        forecast_model=SELECTED_ESTIMATOR,
+        forecast_model=FORECAST_MODEL_HURDLE,
         effective_daily_sales=effective_daily_sales,
         predictive_mean=predictive_mean,
         dispersion=distribution.variance,

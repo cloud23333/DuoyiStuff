@@ -5,6 +5,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from zipfile import ZipFile
 
+from openpyxl.utils import column_index_from_string
+
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 DOC_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -152,11 +154,7 @@ def _col_index_from_ref(ref: str) -> int | None:
     match = CELL_REF_RE.match(ref)
     if not match:
         return None
-    letters = match.group(1)
-    col_num = 0
-    for ch in letters:
-        col_num = col_num * 26 + (ord(ch) - ord("A") + 1)
-    return col_num - 1
+    return column_index_from_string(match.group(1)) - 1
 
 
 def _join_text_nodes(node: ET.Element) -> str:

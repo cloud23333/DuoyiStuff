@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -205,61 +206,42 @@ def _build_localized_console_output(
         return summary_data.get(key, "-")
 
     order_lines = summary_value("订单行数")
-    sales_rows = summary_value("销售行数")
-    matched_lines = summary_value("匹配订单行数")
-    join_coverage_pct = summary_value("匹配覆盖率_百分比")
-    quality_issue_rows = summary_value("质量问题行数")
-    total_recommended = summary_value("建议发货总量")
-    small_change_kept_lines = summary_value("触发30%免改行数")
-    demand_profile_summary = summary_value("需求类型分布")
-    anomaly_flag_summary = summary_value("异常标记分布")
-    service_level_summary = summary_value("服务水平分布")
-    forecast_model_summary = summary_value("预测模型分布")
-    service_level_offset = summary_value("全局服务水平偏移")
-    base_stock_qty = summary_value("保底库存目标")
-    base_stock_triggered_skus = summary_value("保底触发SKU数")
-    base_stock_triggered_lines = summary_value("保底触发订单行数")
-    min_order_ship_qty = summary_value("最小发货阈值")
-    low_qty_orders_before_exempt = summary_value("阈值前低发货量订单数")
-    low_qty_orders = summary_value("低于阈值订单数_提示")
-    low_qty_orders_exempted = summary_value("低于阈值豁免订单数")
-
-    sku_limit_rule_count = summary_value("订单内SKU限额规则数")
-    sku_limit_capped_lines = summary_value("触发订单内SKU限额行数")
-    excluded_skc_rule_count = summary_value("SKC拦截规则数")
-    excluded_skuid_rule_count = summary_value("SKUID拦截规则数")
-    intercepted_order_lines = summary_value("命中拦截订单行数")
-    intercepted_orders = summary_value("拦截导致不发订单数")
-
     lines = [
         "运行完成。",
         f"订单行数：{order_lines}",
-        f"销售行数：{sales_rows}",
-        f"匹配覆盖率：{matched_lines}/{order_lines} ({join_coverage_pct}%)",
-        f"质量问题行数：{quality_issue_rows}",
-        f"建议发货数量：{total_recommended}",
-        f"30%变动保留行数：{small_change_kept_lines}",
-        f"需求类型分布：{demand_profile_summary}",
-        f"异常标记分布：{anomaly_flag_summary}",
-        f"服务水平分布：{service_level_summary}",
-        f"预测模型分布：{forecast_model_summary}",
-        f"全局服务水平偏移：{service_level_offset}",
-        f"保底库存目标：{base_stock_qty}",
-        f"保底触发：{base_stock_triggered_skus} 个SKU，{base_stock_triggered_lines} 行",
-        f"最小发货阈值：{min_order_ship_qty}",
-        f"阈值前低发货量订单数：{low_qty_orders_before_exempt}",
-        f"低发货量豁免订单数：{low_qty_orders_exempted}",
-        f"低发货量拦截订单数：{low_qty_orders}",
+        f"销售行数：{summary_value('销售行数')}",
+        (
+            f"匹配覆盖率：{summary_value('匹配订单行数')}/{order_lines} "
+            f"({summary_value('匹配覆盖率_百分比')}%)"
+        ),
+        f"质量问题行数：{summary_value('质量问题行数')}",
+        f"建议发货数量：{summary_value('建议发货总量')}",
+        f"30%变动保留行数：{summary_value('触发30%免改行数')}",
+        f"需求类型分布：{summary_value('需求类型分布')}",
+        f"异常标记分布：{summary_value('异常标记分布')}",
+        f"服务水平分布：{summary_value('服务水平分布')}",
+        f"预测模型分布：{summary_value('预测模型分布')}",
+        f"全局服务水平偏移：{summary_value('全局服务水平偏移')}",
+        f"保底库存目标：{summary_value('保底库存目标')}",
+        (
+            f"保底触发：{summary_value('保底触发SKU数')} 个SKU，"
+            f"{summary_value('保底触发订单行数')} 行"
+        ),
+        f"最小发货阈值：{summary_value('最小发货阈值')}",
+        f"阈值前低发货量订单数：{summary_value('阈值前低发货量订单数')}",
+        f"低发货量豁免订单数：{summary_value('低于阈值豁免订单数')}",
+        f"低发货量拦截订单数：{summary_value('低于阈值订单数_提示')}",
         (
             "单单SKU上限规则："
-            f"{sku_limit_rule_count} 条（触发行数：{sku_limit_capped_lines}）"
+            f"{summary_value('订单内SKU限额规则数')} 条"
+            f"（触发行数：{summary_value('触发订单内SKU限额行数')}）"
         ),
         (
             "SKC/SKUID 排除规则："
-            f"{excluded_skc_rule_count} SKC, "
-            f"{excluded_skuid_rule_count} SKUID "
-            f"(命中订单行：{intercepted_order_lines}, "
-            f"拦截订单：{intercepted_orders})"
+            f"{summary_value('SKC拦截规则数')} SKC, "
+            f"{summary_value('SKUID拦截规则数')} SKUID "
+            f"(命中订单行：{summary_value('命中拦截订单行数')}, "
+            f"拦截订单：{summary_value('拦截导致不发订单数')})"
         ),
         f"约束配置文件：{constraints_path}",
     ]
@@ -285,13 +267,8 @@ def _read_summary_json(path: Path) -> dict[str, object] | None:
 def _prepare_run_output_dir(base_dir: Path) -> Path:
     base_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    candidate = base_dir / f"output_{timestamp}"
-    sequence = 1
-    while candidate.exists():
-        candidate = base_dir / f"output_{timestamp}_{sequence:02d}"
-        sequence += 1
-    candidate.mkdir(parents=False, exist_ok=False)
-    return candidate
+    created = tempfile.mkdtemp(prefix=f"output_{timestamp}_", dir=base_dir)
+    return Path(created)
 
 
 def _resolve_app_base_dir() -> Path:

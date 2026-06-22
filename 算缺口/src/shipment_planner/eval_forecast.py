@@ -20,7 +20,7 @@ import json
 import math
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .engine import compute_forecast_metrics
@@ -228,21 +228,7 @@ def _write_detail_csv(path: Path, rows: Sequence[EvalRow]) -> None:
     with path.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "skc": row.skc,
-                    "skuid": row.skuid,
-                    "strategy": row.strategy,
-                    "train_days": row.train_days,
-                    "holdout_days": row.holdout_days,
-                    "forecast_daily_sales": row.forecast_daily_sales,
-                    "forecast_holdout_total": row.forecast_holdout_total,
-                    "actual_holdout_total": row.actual_holdout_total,
-                    "abs_error": row.abs_error,
-                    "signed_error": row.signed_error,
-                }
-            )
+        writer.writerows(asdict(row) for row in rows)
 
 
 def _build_summary(
@@ -262,36 +248,35 @@ def _build_summary(
             "by_strategy": {},
         }
 
-    abs_total = sum(row.abs_error for row in rows)
-    actual_total = sum(row.actual_holdout_total for row in rows)
-    signed_total = sum(row.signed_error for row in rows)
-    count = len(rows)
-
     by_strategy_rows: dict[str, list[EvalRow]] = defaultdict(list)
     for row in rows:
         by_strategy_rows[row.strategy].append(row)
 
     by_strategy: dict[str, dict[str, object]] = {}
     for strategy, strategy_rows in by_strategy_rows.items():
-        strategy_abs = sum(r.abs_error for r in strategy_rows)
-        strategy_actual = sum(r.actual_holdout_total for r in strategy_rows)
-        strategy_signed = sum(r.signed_error for r in strategy_rows)
-        strategy_count = len(strategy_rows)
         by_strategy[strategy] = {
-            "count": strategy_count,
-            "mae": _round(strategy_abs / strategy_count),
-            "wape": _round(strategy_abs / strategy_actual) if strategy_actual > 0 else None,
-            "bias": _round(strategy_signed / strategy_count),
+            "count": len(strategy_rows),
+            **_metrics(strategy_rows),
         }
 
     return {
-        "evaluated_skus": count,
+        "evaluated_skus": len(rows),
         "skipped_insufficient_history": skipped_insufficient_history,
         "holdout_days": holdout_days,
+        **_metrics(rows),
+        "by_strategy": by_strategy,
+    }
+
+
+def _metrics(rows: Sequence[EvalRow]) -> dict[str, object]:
+    abs_total = sum(row.abs_error for row in rows)
+    actual_total = sum(row.actual_holdout_total for row in rows)
+    signed_total = sum(row.signed_error for row in rows)
+    count = len(rows)
+    return {
         "mae": _round(abs_total / count),
         "wape": _round(abs_total / actual_total) if actual_total > 0 else None,
         "bias": _round(signed_total / count),
-        "by_strategy": by_strategy,
     }
 
 

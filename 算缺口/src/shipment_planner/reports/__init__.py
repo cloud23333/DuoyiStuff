@@ -42,7 +42,7 @@ def export_reports(
     recommendation_path = output_dir / "发货建议明细.xlsx"
     quality_path = output_dir / "数据质量报告.csv"
     summary_path = output_dir / "运行摘要.json"
-    _remove_stale_recommendation_csv(output_dir / "发货建议明细.csv")
+    (output_dir / "发货建议明细.csv").unlink(missing_ok=True)
 
     quality_columns = [target for _, target in QUALITY_FIELDS]
 
@@ -68,13 +68,6 @@ def export_reports(
         "quality_report": quality_path,
         "run_summary": summary_path,
     }
-
-
-def _remove_stale_recommendation_csv(path: Path) -> None:
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) -> None:

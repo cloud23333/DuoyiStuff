@@ -21,7 +21,7 @@
 ### 2) 自动识别输入并运行
 
 ```bash
-python3 src/main.py --input-dir data/input --out-dir data/output
+PYTHONPATH=src python3 -m shipment_planner.cli --input-dir data/input --out-dir data/output
 ```
 
 说明：
@@ -31,7 +31,7 @@ python3 src/main.py --input-dir data/input --out-dir data/output
 ### 3) 显式指定文件运行
 
 ```bash
-python3 src/main.py \
+PYTHONPATH=src python3 -m shipment_planner.cli \
   --orders data/input/<orders>.xlsx \
   --sales data/input/<sales>.xlsx \
   --temu-sales data/input/<temu-daily-sales>.xlsx \
@@ -91,12 +91,6 @@ python3 -m pip install PyQt6
 ```
 
 启动：
-
-```bash
-python3 src/ui_main.py
-```
-
-或：
 
 ```bash
 PYTHONPATH=src python3 -m planner_ui
