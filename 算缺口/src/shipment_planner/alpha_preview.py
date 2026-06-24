@@ -186,5 +186,25 @@ def suggest_alpha(points: Sequence[AlphaPoint]) -> float:
     return _clamp(chosen, _SUGGESTED_ALPHA_FLOOR, _SUGGESTED_ALPHA_CEILING)
 
 
+def interpolate_ship_lost(
+    points: Sequence[AlphaPoint], alpha: float
+) -> tuple[float, float]:
+    ordered = sorted(points, key=lambda point: point.alpha)
+    if not ordered:
+        return (0.0, 0.0)
+    if alpha <= ordered[0].alpha:
+        return (float(ordered[0].ship_units), float(ordered[0].lost_units))
+    if alpha >= ordered[-1].alpha:
+        return (float(ordered[-1].ship_units), float(ordered[-1].lost_units))
+    for low, high in zip(ordered, ordered[1:]):
+        if low.alpha <= alpha <= high.alpha:
+            span = high.alpha - low.alpha
+            t = 0.0 if span == 0 else (alpha - low.alpha) / span
+            ship = low.ship_units + t * (high.ship_units - low.ship_units)
+            lost = low.lost_units + t * (high.lost_units - low.lost_units)
+            return (ship, lost)
+    return (float(ordered[-1].ship_units), float(ordered[-1].lost_units))
+
+
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))

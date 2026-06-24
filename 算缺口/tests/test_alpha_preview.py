@@ -6,6 +6,7 @@ from shipment_planner.alpha_preview import (
     FALLBACK_SUGGESTED_ALPHA,
     AlphaPoint,
     _curve_from_parsed,
+    interpolate_ship_lost,
     suggest_alpha,
 )
 from shipment_planner.models import OrderLine, SalesRecord
@@ -73,3 +74,35 @@ def test_curve_from_parsed_is_non_increasing_and_default_matches_alpha_one():
 
     alpha_one = next(point for point in curve.points if point.alpha == 1.0)
     assert alpha_one.ship_units == curve.default_ship_units
+
+
+def test_interpolate_ship_lost_returns_exact_grid_point_as_floats():
+    points = (
+        _point(1.0, ship_units=100, lost_units=10),
+        _point(0.8, ship_units=60, lost_units=40),
+    )
+    assert interpolate_ship_lost(points, 0.8) == (60.0, 40.0)
+
+
+def test_interpolate_ship_lost_averages_at_midpoint():
+    points = (
+        _point(1.0, ship_units=100, lost_units=10),
+        _point(0.8, ship_units=60, lost_units=40),
+    )
+    assert interpolate_ship_lost(points, 0.9) == (80.0, 25.0)
+
+
+def test_interpolate_ship_lost_clamps_below_smallest_alpha():
+    points = (
+        _point(1.0, ship_units=100, lost_units=10),
+        _point(0.8, ship_units=60, lost_units=40),
+    )
+    assert interpolate_ship_lost(points, 0.5) == (60.0, 40.0)
+
+
+def test_interpolate_ship_lost_clamps_above_largest_alpha():
+    points = (
+        _point(1.0, ship_units=100, lost_units=10),
+        _point(0.8, ship_units=60, lost_units=40),
+    )
+    assert interpolate_ship_lost(points, 1.2) == (100.0, 10.0)
