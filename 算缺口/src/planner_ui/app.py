@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication
+from PyQt6.QtCore import QObject, Qt, QThread, QUrl, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -31,6 +33,7 @@ from planner_ui.workflow import (
     get_constraints_path,
     run_planner,
 )
+from shipment_planner.alpha_preview import AlphaCurve
 from shipment_planner.engine import DEFAULT_BASE_STOCK_QTY
 
 
@@ -52,11 +55,42 @@ class PlannerRunWorker(QObject):
         self.finished.emit(result)
 
 
+class PreviewWorker(QObject):
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, orders_path: Path, sales_path: Path, temu_path: Path) -> None:
+        super().__init__()
+        self._orders_path = orders_path
+        self._sales_path = sales_path
+        self._temu_path = temu_path
+
+    @pyqtSlot()
+    def run(self) -> None:
+        try:
+            from shipment_planner.alpha_preview import compute_alpha_curve
+
+            curve = compute_alpha_curve(
+                orders_path=self._orders_path,
+                sales_path=self._sales_path,
+                temu_path=self._temu_path,
+            )
+        except Exception as exc:  # pragma: no cover - UI error channel
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(curve)
+
+
 class PlannerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._run_thread: QThread | None = None
         self._run_worker: PlannerRunWorker | None = None
+        self._preview_thread: QThread | None = None
+        self._preview_worker: PreviewWorker | None = None
+        self._auto_previewed_paths: tuple[str, str, str] | None = None
+        self._alpha_curve: AlphaCurve | None = None
+        self._alpha_syncing = False
         self._constraints_ready = False
         self._last_dialog_dir: Path | None = None
 
@@ -92,6 +126,7 @@ class PlannerWindow(QMainWindow):
 
         self.order_path_edit = QLineEdit()
         self.order_path_edit.setReadOnly(True)
+        self.order_path_edit.textChanged.connect(self._maybe_auto_preview)
         self.order_path_edit.setPlaceholderText(".xlsx 订单文件")
         self.order_browse_button = QPushButton("订单")
         self.order_browse_button.clicked.connect(self._on_pick_orders)
@@ -99,6 +134,7 @@ class PlannerWindow(QMainWindow):
 
         self.sales_path_edit = QLineEdit()
         self.sales_path_edit.setReadOnly(True)
+        self.sales_path_edit.textChanged.connect(self._maybe_auto_preview)
         self.sales_path_edit.setPlaceholderText(".xlsx 销售文件")
         self.sales_browse_button = QPushButton("销售")
         self.sales_browse_button.clicked.connect(self._on_pick_sales)
@@ -113,6 +149,7 @@ class PlannerWindow(QMainWindow):
 
         self.temu_path_edit = QLineEdit()
         self.temu_path_edit.setReadOnly(True)
+        self.temu_path_edit.textChanged.connect(self._maybe_auto_preview)
         self.temu_path_edit.setPlaceholderText(".xlsx Temu每日销量文件（必选）")
         self.temu_browse_button = QPushButton("Temu明细")
         self.temu_browse_button.clicked.connect(self._on_pick_temu_sales)
@@ -177,12 +214,44 @@ class PlannerWindow(QMainWindow):
         self.base_stock_qty_spin.setValue(DEFAULT_BASE_STOCK_QTY)
         self.base_stock_qty_spin.setFixedWidth(108)
 
-        self.protection_interval_factor_spin = QDoubleSpinBox()
-        self.protection_interval_factor_spin.setDecimals(2)
-        self.protection_interval_factor_spin.setRange(0.1, 1.0)
-        self.protection_interval_factor_spin.setSingleStep(0.05)
-        self.protection_interval_factor_spin.setValue(1.0)
-        self.protection_interval_factor_spin.setFixedWidth(108)
+        self.alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self.alpha_slider.setRange(50, 100)
+        self.alpha_slider.setSingleStep(5)
+        self.alpha_slider.setPageStep(5)
+        self.alpha_slider.setValue(100)
+        self.alpha_slider.valueChanged.connect(self._on_alpha_slider_changed)
+        self.alpha_slider.valueChanged.connect(self._update_alpha_estimate)
+        self.alpha_slider.sliderReleased.connect(self._render_alpha_plot)
+
+        self.alpha_value_spin = QDoubleSpinBox()
+        self.alpha_value_spin.setDecimals(2)
+        self.alpha_value_spin.setRange(0.50, 1.00)
+        self.alpha_value_spin.setSingleStep(0.05)
+        self.alpha_value_spin.setValue(1.0)
+        self.alpha_value_spin.setFixedWidth(90)
+        self.alpha_value_spin.valueChanged.connect(self._on_alpha_spin_changed)
+        self.alpha_value_spin.editingFinished.connect(self._render_alpha_plot)
+
+        self.alpha_suggested_label = QLabel("建议值：—")
+        self.alpha_adopt_button = QPushButton("采用建议")
+        self.alpha_adopt_button.setEnabled(False)
+        self.alpha_adopt_button.clicked.connect(self._on_adopt_suggested_alpha)
+
+        self.alpha_estimate_label = QLabel("预计今日发货：先点“预览发货量”")
+        self.alpha_estimate_label.setWordWrap(True)
+        estimate_font = QFont()
+        estimate_font.setBold(True)
+        estimate_font.setPointSize(13)
+        self.alpha_estimate_label.setFont(estimate_font)
+        self.alpha_estimate_label.setStyleSheet("color: #0f766e;")
+
+        self.preview_button = QPushButton("重新预览")
+        self.preview_button.setToolTip("文件没变、但磁盘上的数据更新了，可点此重新预览")
+        self.preview_button.clicked.connect(self._on_preview_clicked)
+
+        self.alpha_plot_label = QLabel()
+        self.alpha_plot_label.setFixedSize(440, 220)
+        self.alpha_plot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
@@ -198,8 +267,8 @@ class PlannerWindow(QMainWindow):
         params_grid.addWidget(self.service_level_offset_spin, 0, 1)
         params_grid.addWidget(QLabel("保底库存"), 0, 2)
         params_grid.addWidget(self.base_stock_qty_spin, 0, 3)
-        params_grid.addWidget(QLabel("备货期覆盖系数 α"), 1, 0)
-        params_grid.addWidget(self.protection_interval_factor_spin, 1, 1)
+
+        alpha_card = self._build_alpha_card()
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -207,8 +276,50 @@ class PlannerWindow(QMainWindow):
         action_row.addWidget(self.run_button)
 
         layout.addLayout(params_grid)
+        layout.addWidget(alpha_card)
         layout.addLayout(action_row)
         return group
+
+    def _build_alpha_card(self) -> QGroupBox:
+        card = QGroupBox("发货保守度 α · 越小越保守，少发降积压")
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(8)
+        card_layout.setContentsMargins(10, 6, 10, 8)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        action_row.addWidget(self.preview_button)
+        action_row.addStretch(1)
+        action_row.addWidget(self.alpha_suggested_label)
+        action_row.addWidget(self.alpha_adopt_button)
+
+        anchor_font = QFont()
+        anchor_font.setPointSize(8)
+        left_anchor = QLabel("正常 1.0")
+        left_anchor.setFont(anchor_font)
+        left_anchor.setStyleSheet("color: #888;")
+        right_anchor = QLabel("0.5 保守")
+        right_anchor.setFont(anchor_font)
+        right_anchor.setStyleSheet("color: #888;")
+
+        slider_row = QHBoxLayout()
+        slider_row.setSpacing(8)
+        slider_row.addWidget(left_anchor)
+        slider_row.addWidget(self.alpha_slider, stretch=1)
+        slider_row.addWidget(right_anchor)
+        slider_row.addWidget(QLabel("α"))
+        slider_row.addWidget(self.alpha_value_spin)
+
+        plot_row = QHBoxLayout()
+        plot_row.addStretch(1)
+        plot_row.addWidget(self.alpha_plot_label)
+        plot_row.addStretch(1)
+
+        card_layout.addLayout(action_row)
+        card_layout.addLayout(slider_row)
+        card_layout.addWidget(self.alpha_estimate_label)
+        card_layout.addLayout(plot_row)
+        return card
 
     def _build_skc_group(self) -> QGroupBox:
         group = QGroupBox("SKC")
@@ -396,6 +507,216 @@ class PlannerWindow(QMainWindow):
             return
         self._start_run(run_request)
 
+    @pyqtSlot(int)
+    def _on_alpha_slider_changed(self, value: int) -> None:
+        if self._alpha_syncing:
+            return
+        self._alpha_syncing = True
+        try:
+            self.alpha_value_spin.setValue(value / 100)
+        finally:
+            self._alpha_syncing = False
+
+    @pyqtSlot(float)
+    def _on_alpha_spin_changed(self, value: float) -> None:
+        if self._alpha_syncing:
+            return
+        self._alpha_syncing = True
+        try:
+            self.alpha_slider.setValue(round(value * 100))
+        finally:
+            self._alpha_syncing = False
+        self._update_alpha_estimate()
+
+    @pyqtSlot()
+    def _on_adopt_suggested_alpha(self) -> None:
+        if self._alpha_curve is None:
+            return
+        self.alpha_slider.setValue(round(self._alpha_curve.suggested_alpha * 100))
+        self._render_alpha_plot()
+
+    def _maybe_auto_preview(self) -> None:
+        if self._preview_thread is not None:
+            return
+        orders = self.order_path_edit.text().strip()
+        sales = self.sales_path_edit.text().strip()
+        temu = self.temu_path_edit.text().strip()
+        if not (orders and sales and temu):
+            return
+        triple = (orders, sales, temu)
+        if triple == self._auto_previewed_paths:
+            return
+        self._auto_previewed_paths = triple
+        self._start_preview(Path(orders), Path(sales), Path(temu))
+
+    @pyqtSlot()
+    def _on_preview_clicked(self) -> None:
+        orders_text = self.order_path_edit.text().strip()
+        sales_text = self.sales_path_edit.text().strip()
+        temu_text = self.temu_path_edit.text().strip()
+        if not orders_text or not sales_text or not temu_text:
+            QMessageBox.warning(
+                self,
+                "信息不完整",
+                "请先选择订单文件、销售文件和 Temu每日销量文件。",
+            )
+            return
+        self._auto_previewed_paths = (orders_text, sales_text, temu_text)
+        self._start_preview(
+            Path(orders_text), Path(sales_text), Path(temu_text)
+        )
+
+    def _start_preview(
+        self, orders_path: Path, sales_path: Path, temu_path: Path
+    ) -> None:
+        self.preview_button.setEnabled(False)
+        self._set_status("正在预览，请稍候...")
+
+        self._preview_thread = QThread(self)
+        self._preview_worker = PreviewWorker(orders_path, sales_path, temu_path)
+        self._preview_worker.moveToThread(self._preview_thread)
+
+        self._preview_thread.started.connect(self._preview_worker.run)
+        self._preview_worker.finished.connect(self._on_preview_finished)
+        self._preview_worker.failed.connect(self._on_preview_failed)
+
+        self._preview_worker.finished.connect(self._preview_thread.quit)
+        self._preview_worker.failed.connect(self._preview_thread.quit)
+        self._preview_worker.finished.connect(self._preview_worker.deleteLater)
+        self._preview_worker.failed.connect(self._preview_worker.deleteLater)
+
+        self._preview_thread.finished.connect(self._on_preview_thread_finished)
+        self._preview_thread.finished.connect(self._preview_thread.deleteLater)
+        self._preview_thread.start()
+
+    @pyqtSlot(object)
+    def _on_preview_finished(self, curve: object) -> None:
+        if not isinstance(curve, AlphaCurve):
+            self._on_preview_failed("预览结果数据格式异常。")
+            return
+
+        self._alpha_curve = curve
+        self.alpha_slider.setEnabled(True)
+        self.alpha_value_spin.setEnabled(True)
+        self.alpha_adopt_button.setEnabled(True)
+        self.alpha_suggested_label.setText(f"建议值：{curve.suggested_alpha:.2f}")
+        self._render_alpha_plot()
+        self._update_alpha_estimate()
+        self.preview_button.setEnabled(True)
+        self._set_status("预览完成，可拖动滑块查看预计发货量。")
+
+    @pyqtSlot(str)
+    def _on_preview_failed(self, message: str) -> None:
+        self._auto_previewed_paths = None
+        self._append_log(f"【错误】预览失败：{message}")
+        self._set_status(f"预览失败：{message}", error=True)
+        self.preview_button.setEnabled(True)
+        QMessageBox.critical(self, "预览失败", message)
+
+    @pyqtSlot()
+    def _on_preview_thread_finished(self) -> None:
+        self._preview_worker = None
+        self._preview_thread = None
+
+    def _update_alpha_estimate(self) -> None:
+        curve = self._alpha_curve
+        if curve is None:
+            self.alpha_estimate_label.setText("预计今日发货：先点“预览发货量”")
+            return
+
+        current_alpha = self.alpha_slider.value() / 100
+        point = min(
+            curve.points, key=lambda p: abs(p.alpha - current_alpha)
+        )
+        default_ship = curve.default_ship_units
+        if default_ship > 0:
+            pct = 100 * (point.ship_units - default_ship) / default_ship
+        else:
+            pct = 0.0
+        self.alpha_estimate_label.setText(
+            f"预计今日发货 ≈ {point.ship_units} 件（比正常 {pct:+.0f}%）"
+        )
+
+    def _render_alpha_plot(self) -> None:
+        curve = self._alpha_curve
+        if curve is None or not curve.points:
+            return
+
+        import matplotlib
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        cjk_font = _resolve_cjk_font()
+        previous_sans = matplotlib.rcParams["font.sans-serif"]
+        previous_minus = matplotlib.rcParams["axes.unicode_minus"]
+        if cjk_font is not None:
+            matplotlib.rcParams["font.sans-serif"] = [cjk_font, *previous_sans]
+            matplotlib.rcParams["axes.unicode_minus"] = False
+
+        figure = Figure(figsize=(4.6, 2.4), dpi=120)
+        FigureCanvasAgg(figure)
+        try:
+            self._draw_alpha_axes(figure, curve, use_cjk=cjk_font is not None)
+            buffer = io.BytesIO()
+            figure.savefig(buffer, format="png")
+        finally:
+            figure.clear()
+            matplotlib.rcParams["font.sans-serif"] = previous_sans
+            matplotlib.rcParams["axes.unicode_minus"] = previous_minus
+
+        pixmap = QPixmap()
+        pixmap.loadFromData(buffer.getvalue())
+        self.alpha_plot_label.setPixmap(pixmap)
+
+    def _draw_alpha_axes(self, figure, curve: AlphaCurve, *, use_cjk: bool) -> None:
+        labels = _PLOT_LABELS_CJK if use_cjk else _PLOT_LABELS_EN
+        ordered = sorted(curve.points, key=lambda p: p.alpha)
+        alphas = [p.alpha for p in ordered]
+        ship_units = [p.ship_units for p in ordered]
+        lost_units = [p.lost_units for p in ordered]
+
+        ax_ship = figure.add_subplot(111)
+        ship_line, = ax_ship.plot(
+            alphas, ship_units, color="#1f77b4", marker="o", markersize=3,
+            label=labels["ship"],
+        )
+        ax_ship.set_xlabel("α", fontsize=7)
+        ax_ship.set_ylabel(labels["ship"], color="#1f77b4", fontsize=7)
+        ax_ship.tick_params(axis="both", labelsize=6)
+        ax_ship.tick_params(axis="y", labelcolor="#1f77b4")
+
+        ax_lost = ax_ship.twinx()
+        lost_line, = ax_lost.plot(
+            alphas, lost_units, color="#d62728", marker="s", markersize=3,
+            label=labels["risk"],
+        )
+        ax_lost.set_ylabel(labels["risk"], color="#d62728", fontsize=7)
+        ax_lost.tick_params(axis="y", labelsize=6, labelcolor="#d62728")
+
+        current_alpha = self.alpha_slider.value() / 100
+        current_line = ax_ship.axvline(
+            current_alpha, color="#333333", linewidth=1.0, label=labels["current"]
+        )
+        suggested_line = ax_ship.axvline(
+            curve.suggested_alpha, color="#2ca02c", linewidth=1.0, linestyle="--",
+            label=labels["suggested"],
+        )
+
+        handles = [ship_line, lost_line, current_line, suggested_line]
+        ax_ship.legend(
+            handles=handles,
+            labels=[handle.get_label() for handle in handles],
+            fontsize=6,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.18),
+            ncol=2,
+            frameon=False,
+            columnspacing=1.2,
+            handlelength=1.4,
+            handletextpad=0.4,
+        )
+        figure.tight_layout(pad=0.6)
+
     @pyqtSlot(object)
     def _on_run_finished(self, result_obj: object) -> None:
         if not isinstance(result_obj, PlannerRunResult):
@@ -482,7 +803,10 @@ class PlannerWindow(QMainWindow):
             self.open_config_dir_button,
             self.service_level_offset_spin,
             self.base_stock_qty_spin,
-            self.protection_interval_factor_spin,
+            self.alpha_slider,
+            self.alpha_value_spin,
+            self.alpha_adopt_button,
+            self.preview_button,
             self.clear_log_button,
         ):
             control.setEnabled(not running)
@@ -494,6 +818,7 @@ class PlannerWindow(QMainWindow):
             return
 
         self.copy_skc_button.setEnabled(bool(self.skc_text_edit.toPlainText().strip()))
+        self.alpha_adopt_button.setEnabled(self._alpha_curve is not None)
         self._refresh_run_button_state()
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
@@ -534,9 +859,7 @@ class PlannerWindow(QMainWindow):
             "output_dir": Path(output_text),
             "service_level_offset": float(self.service_level_offset_spin.value()),
             "base_stock_qty": int(self.base_stock_qty_spin.value()),
-            "protection_interval_factor": float(
-                self.protection_interval_factor_spin.value()
-            ),
+            "protection_interval_factor": float(self.alpha_value_spin.value()),
             "temu_sales_path": Path(temu_text),
         }
 
@@ -665,9 +988,7 @@ class PlannerWindow(QMainWindow):
             output_dir=Path(output_text),
             service_level_offset=float(self.service_level_offset_spin.value()),
             base_stock_qty=int(self.base_stock_qty_spin.value()),
-            protection_interval_factor=float(
-                self.protection_interval_factor_spin.value()
-            ),
+            protection_interval_factor=float(self.alpha_value_spin.value()),
         )
         return validation_error is None
 
@@ -717,6 +1038,42 @@ class PlannerWindow(QMainWindow):
         if not 0.0 < protection_interval_factor <= 1.0:
             return "备货期覆盖系数 α 需在 (0, 1] 之间。"
         return None
+
+
+_CJK_FONT_CANDIDATES = (
+    "PingFang SC",
+    "Heiti SC",
+    "STHeiti",
+    "Arial Unicode MS",
+    "Hiragino Sans GB",
+)
+_PLOT_LABELS_CJK = {
+    "ship": "发货量",
+    "risk": "缺货风险",
+    "current": "当前",
+    "suggested": "建议",
+}
+_PLOT_LABELS_EN = {
+    "ship": "ship",
+    "risk": "stockout risk",
+    "current": "current",
+    "suggested": "suggested",
+}
+_resolved_cjk_font: list[str | None] = []
+
+
+def _resolve_cjk_font() -> str | None:
+    if _resolved_cjk_font:
+        return _resolved_cjk_font[0]
+
+    from matplotlib import font_manager
+
+    available = {font.name for font in font_manager.fontManager.ttflist}
+    chosen = next(
+        (family for family in _CJK_FONT_CANDIDATES if family in available), None
+    )
+    _resolved_cjk_font.append(chosen)
+    return chosen
 
 
 def _monospace_font() -> QFont:
