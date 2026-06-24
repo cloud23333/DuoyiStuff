@@ -333,6 +333,7 @@ def test_summary_includes_forecast_explanation_distributions():
         small_change_kept_lines=0,
         service_level_offset=0.0,
         base_stock_qty=2,
+        protection_interval_factor=1.0,
     )
 
     assert summary["demand_profile_summary"] == "稳定款 2，波动款 1，慢销/间歇款 1"
