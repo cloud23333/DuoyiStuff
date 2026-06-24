@@ -50,6 +50,7 @@ PYTHONPATH=src python3 -m shipment_planner.cli \
 | `--constraints` | 空 | 指定约束 JSON；不传时会尝试读取 `--input-dir/shipment_constraints.json` |
 | `--min-order-ship-qty` | `10` | 订单级最小起发阈值 |
 | `--service-level-offset` | `0.0` | 全局服务水平偏移，建议范围 `[-0.3, 0.3]`（替代旧的 `--global-gap-multiplier`）|
+| `--protection-interval-factor` | `1.0` | 备货期覆盖系数 α，`<1` 更保守（每天发货可只覆盖部分备货逻辑天数）|
 
 ## 输出文件
 
@@ -152,6 +153,7 @@ UI 说明：
 - 程序把 Temu 每日销量序列估成一个**需求分布**（均值 + 离散度，间歇/慢销用 hurdle 模型），一次性爆单只抬离散度不抬均值，连续暴跌则快速下调
 - 预测备货期销量取该分布在 `service_level` 分位的值（偏保守贴中位数；热销/持续抬升款上调一档；暴死款压到中位数）
 - 缺口按 `ceil(max(0, 分位备货期销量 - 可用库存))` 得出，建议发货量不超过订单需求量
+- `--protection-interval-factor` 给上式加一个备货期覆盖系数 α：`gap = ceil(max(0, α·分位备货期销量 − 可用库存))`，α<1 表示只覆盖部分备货逻辑天数（更保守）
 - 可用库存使用 `平台仓内库存 + 平台待收货库存 + 发货中数量`
 - `--service-level-offset` 对所有款的 `service_level` 做全局偏移（吸收了旧的热销 `1.2` 倍与全局缺口倍率）
 - 单行建议量在同一 `(SKC, SKUID)` 内按状态、下单时间、源行号顺序分配

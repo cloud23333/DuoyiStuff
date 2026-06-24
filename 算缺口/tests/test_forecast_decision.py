@@ -4,9 +4,11 @@ from __future__ import annotations
 import pytest
 
 from shipment_planner.forecast_decision import (
+    SERVICE_LEVEL_FLOOR,
     SL_BASE,
     SL_DEATH,
     SL_HOT,
+    critical_ratio_from_aversion,
     resolve_service_level,
 )
 
@@ -39,4 +41,9 @@ def test_offset_is_clamped():
     ) == pytest.approx(0.95)
     assert resolve_service_level(
         recent_drop=True, sustained_rise=False, offset=-0.9
-    ) == pytest.approx(0.40)
+    ) == pytest.approx(SERVICE_LEVEL_FLOOR)
+
+
+def test_critical_ratio_from_aversion():
+    assert critical_ratio_from_aversion(11 / 9) == pytest.approx(0.45)
+    assert critical_ratio_from_aversion(3.0) == pytest.approx(0.25)

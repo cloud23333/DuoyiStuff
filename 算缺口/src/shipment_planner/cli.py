@@ -70,6 +70,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             f"Use 0 to disable (default: {DEFAULT_BASE_STOCK_QTY})"
         ),
     )
+    parser.add_argument(
+        "--protection-interval-factor",
+        type=float,
+        default=1.0,
+        help="备货期覆盖系数 α∈(0,1]，越小越保守（每天发货可只覆盖部分备货逻辑天数），默认 1.0",
+    )
     return parser
 
 
@@ -146,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     service_level_offset = args.service_level_offset
     base_stock_qty = args.base_stock_qty
+    protection_interval_factor = args.protection_interval_factor
 
     recommendations, quality_rows, summary = build_recommendations(
         order_lines,
@@ -156,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         shipping_in_progress_by_key=shipping_in_progress_by_key,
         service_level_offset=service_level_offset,
         base_stock_qty=base_stock_qty,
+        protection_interval_factor=protection_interval_factor,
         daily_sales_by_key=daily_sales_by_key,
     )
     eval_rows, _eval_skipped, eval_summary = run_holdout_eval(

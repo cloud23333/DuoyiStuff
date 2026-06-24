@@ -26,6 +26,7 @@ def build_summary(
     small_change_kept_lines: int,
     service_level_offset: float,
     base_stock_qty: int,
+    protection_interval_factor: float,
 ) -> dict[str, object]:
     order_line_count = len(order_lines)
     matched_count = sum(
@@ -80,6 +81,7 @@ def build_summary(
         "intercepted_orders": intercepted_orders,
         "small_change_kept_lines": small_change_kept_lines,
         "service_level_offset": round_qty(service_level_offset),
+        "protection_interval_factor": round_qty(protection_interval_factor),
         "base_stock_qty": base_stock_qty,
         "base_stock_triggered_skus": len(base_stock_triggered_skus),
         "base_stock_triggered_lines": len(base_stock_triggered_rows),

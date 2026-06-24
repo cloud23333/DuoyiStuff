@@ -177,6 +177,13 @@ class PlannerWindow(QMainWindow):
         self.base_stock_qty_spin.setValue(DEFAULT_BASE_STOCK_QTY)
         self.base_stock_qty_spin.setFixedWidth(108)
 
+        self.protection_interval_factor_spin = QDoubleSpinBox()
+        self.protection_interval_factor_spin.setDecimals(2)
+        self.protection_interval_factor_spin.setRange(0.1, 1.0)
+        self.protection_interval_factor_spin.setSingleStep(0.05)
+        self.protection_interval_factor_spin.setValue(1.0)
+        self.protection_interval_factor_spin.setFixedWidth(108)
+
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
@@ -191,6 +198,8 @@ class PlannerWindow(QMainWindow):
         params_grid.addWidget(self.service_level_offset_spin, 0, 1)
         params_grid.addWidget(QLabel("保底库存"), 0, 2)
         params_grid.addWidget(self.base_stock_qty_spin, 0, 3)
+        params_grid.addWidget(QLabel("备货期覆盖系数 α"), 1, 0)
+        params_grid.addWidget(self.protection_interval_factor_spin, 1, 1)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -473,6 +482,7 @@ class PlannerWindow(QMainWindow):
             self.open_config_dir_button,
             self.service_level_offset_spin,
             self.base_stock_qty_spin,
+            self.protection_interval_factor_spin,
             self.clear_log_button,
         ):
             control.setEnabled(not running)
@@ -524,6 +534,9 @@ class PlannerWindow(QMainWindow):
             "output_dir": Path(output_text),
             "service_level_offset": float(self.service_level_offset_spin.value()),
             "base_stock_qty": int(self.base_stock_qty_spin.value()),
+            "protection_interval_factor": float(
+                self.protection_interval_factor_spin.value()
+            ),
             "temu_sales_path": Path(temu_text),
         }
 
@@ -534,6 +547,7 @@ class PlannerWindow(QMainWindow):
             output_dir=run_kwargs["output_dir"],
             service_level_offset=run_kwargs["service_level_offset"],
             base_stock_qty=run_kwargs["base_stock_qty"],
+            protection_interval_factor=run_kwargs["protection_interval_factor"],
         )
         if validation_error is not None:
             self._set_status(validation_error, error=True)
@@ -651,6 +665,9 @@ class PlannerWindow(QMainWindow):
             output_dir=Path(output_text),
             service_level_offset=float(self.service_level_offset_spin.value()),
             base_stock_qty=int(self.base_stock_qty_spin.value()),
+            protection_interval_factor=float(
+                self.protection_interval_factor_spin.value()
+            ),
         )
         return validation_error is None
 
@@ -668,6 +685,7 @@ class PlannerWindow(QMainWindow):
         output_dir: Path,
         service_level_offset: float,
         base_stock_qty: int,
+        protection_interval_factor: float,
     ) -> str | None:
         if not orders_path.exists():
             return f"订单文件不存在：{orders_path}"
@@ -696,6 +714,8 @@ class PlannerWindow(QMainWindow):
             return "全局服务水平偏移需在 [-0.3, 0.3] 之间。"
         if base_stock_qty < 0:
             return "保底库存不能小于 0。"
+        if not 0.0 < protection_interval_factor <= 1.0:
+            return "备货期覆盖系数 α 需在 (0, 1] 之间。"
         return None
 
 

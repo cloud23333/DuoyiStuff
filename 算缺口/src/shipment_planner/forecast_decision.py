@@ -1,10 +1,23 @@
 # src/shipment_planner/forecast_decision.py
 from __future__ import annotations
 
-SERVICE_LEVEL_FLOOR = 0.40
+
+def critical_ratio_from_aversion(overstock_aversion: float) -> float:
+    """Newsvendor critical ratio Cu/(Cu+Co) for an overstock-aversion k = Co/Cu.
+
+    k is "how many units of overstock-holding cost equal one lost-sale margin".
+    Higher k → lower service level → ship less. k = 11/9 reproduces the historical
+    SL_BASE of 0.45.
+    """
+    return 1.0 / (1.0 + overstock_aversion)
+
+
+OVERSTOCK_AVERSION_BASE = 11.0 / 9.0  # → SL_BASE 0.45
+
+SERVICE_LEVEL_FLOOR = 0.05
 SERVICE_LEVEL_CEIL = 0.95
 SL_DEATH = 0.50
-SL_BASE = 0.45
+SL_BASE = critical_ratio_from_aversion(OVERSTOCK_AVERSION_BASE)
 SL_HOT = 0.50
 
 

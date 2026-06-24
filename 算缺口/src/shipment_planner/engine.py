@@ -79,10 +79,13 @@ def build_recommendations(
     shipping_in_progress_by_key: dict[tuple[str, str], int] | None = None,
     service_level_offset: float = 0.0,
     base_stock_qty: int = DEFAULT_BASE_STOCK_QTY,
+    protection_interval_factor: float = 1.0,
     daily_sales_by_key: dict[tuple[str, str], tuple[int, ...]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
     if base_stock_qty < 0:
         raise ValueError("base_stock_qty must be greater than or equal to 0.")
+    if not 0.0 < protection_interval_factor <= 1.0:
+        raise ValueError("protection_interval_factor must be in (0, 1].")
 
     ordered_lines = sorted(order_lines, key=lambda line: line.row_number)
     normalized_sku_limits = _normalize_sku_limits(sku_order_max_qty)
@@ -100,6 +103,7 @@ def build_recommendations(
         shipping_in_progress_by_key=shipping_in_progress_lookup,
         service_level_offset=service_level_offset,
         base_stock_qty=base_stock_qty,
+        protection_interval_factor=protection_interval_factor,
     )
     suggested_by_row, sku_order_limit_capped_rows = (
         allocate_recommendation_quantities(
@@ -267,6 +271,7 @@ def build_recommendations(
         small_change_kept_lines=small_change_stats.get("small_change_kept_lines", 0),
         service_level_offset=service_level_offset,
         base_stock_qty=base_stock_qty,
+        protection_interval_factor=protection_interval_factor,
     )
     return recommendations, quality_rows, summary
 
@@ -476,6 +481,7 @@ def _build_key_states(
     shipping_in_progress_by_key: dict[tuple[str, str], int],
     service_level_offset: float,
     base_stock_qty: int,
+    protection_interval_factor: float,
 ) -> dict[tuple[str, str], KeyState]:
     states: dict[tuple[str, str], KeyState] = {}
     for key, order_qty_total in key_demand.items():
@@ -526,9 +532,12 @@ def _build_key_states(
             stock_in_warehouse=sales.stock_in_warehouse,
             service_level_offset=service_level_offset,
         )
+        # ponytail: α scales the quantile linearly as a transparent horizon haircut; exact shorter-horizon quantile if it ever matters.
         forecast_gap = max(
             0.0,
-            forecast_metrics.forecast_stocking_period_sales - available_stock,
+            protection_interval_factor
+            * forecast_metrics.forecast_stocking_period_sales
+            - available_stock,
         )
         base_stock_gap_raw = _base_stock_gap(
             base_stock_qty=base_stock_qty,
