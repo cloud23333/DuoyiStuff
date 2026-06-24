@@ -88,6 +88,7 @@ class PlannerWindow(QMainWindow):
         self._run_worker: PlannerRunWorker | None = None
         self._preview_thread: QThread | None = None
         self._preview_worker: PreviewWorker | None = None
+        self._auto_previewed_paths: tuple[str, str, str] | None = None
         self._alpha_curve: AlphaCurve | None = None
         self._alpha_syncing = False
         self._constraints_ready = False
@@ -125,6 +126,7 @@ class PlannerWindow(QMainWindow):
 
         self.order_path_edit = QLineEdit()
         self.order_path_edit.setReadOnly(True)
+        self.order_path_edit.textChanged.connect(self._maybe_auto_preview)
         self.order_path_edit.setPlaceholderText(".xlsx 订单文件")
         self.order_browse_button = QPushButton("订单")
         self.order_browse_button.clicked.connect(self._on_pick_orders)
@@ -132,6 +134,7 @@ class PlannerWindow(QMainWindow):
 
         self.sales_path_edit = QLineEdit()
         self.sales_path_edit.setReadOnly(True)
+        self.sales_path_edit.textChanged.connect(self._maybe_auto_preview)
         self.sales_path_edit.setPlaceholderText(".xlsx 销售文件")
         self.sales_browse_button = QPushButton("销售")
         self.sales_browse_button.clicked.connect(self._on_pick_sales)
@@ -146,6 +149,7 @@ class PlannerWindow(QMainWindow):
 
         self.temu_path_edit = QLineEdit()
         self.temu_path_edit.setReadOnly(True)
+        self.temu_path_edit.textChanged.connect(self._maybe_auto_preview)
         self.temu_path_edit.setPlaceholderText(".xlsx Temu每日销量文件（必选）")
         self.temu_browse_button = QPushButton("Temu明细")
         self.temu_browse_button.clicked.connect(self._on_pick_temu_sales)
@@ -241,7 +245,8 @@ class PlannerWindow(QMainWindow):
         self.alpha_estimate_label.setFont(estimate_font)
         self.alpha_estimate_label.setStyleSheet("color: #0f766e;")
 
-        self.preview_button = QPushButton("预览发货量")
+        self.preview_button = QPushButton("重新预览")
+        self.preview_button.setToolTip("文件没变、但磁盘上的数据更新了，可点此重新预览")
         self.preview_button.clicked.connect(self._on_preview_clicked)
 
         self.alpha_plot_label = QLabel()
@@ -530,6 +535,20 @@ class PlannerWindow(QMainWindow):
         self.alpha_slider.setValue(round(self._alpha_curve.suggested_alpha * 100))
         self._render_alpha_plot()
 
+    def _maybe_auto_preview(self) -> None:
+        if self._preview_thread is not None:
+            return
+        orders = self.order_path_edit.text().strip()
+        sales = self.sales_path_edit.text().strip()
+        temu = self.temu_path_edit.text().strip()
+        if not (orders and sales and temu):
+            return
+        triple = (orders, sales, temu)
+        if triple == self._auto_previewed_paths:
+            return
+        self._auto_previewed_paths = triple
+        self._start_preview(Path(orders), Path(sales), Path(temu))
+
     @pyqtSlot()
     def _on_preview_clicked(self) -> None:
         orders_text = self.order_path_edit.text().strip()
@@ -542,6 +561,7 @@ class PlannerWindow(QMainWindow):
                 "请先选择订单文件、销售文件和 Temu每日销量文件。",
             )
             return
+        self._auto_previewed_paths = (orders_text, sales_text, temu_text)
         self._start_preview(
             Path(orders_text), Path(sales_text), Path(temu_text)
         )
@@ -587,6 +607,7 @@ class PlannerWindow(QMainWindow):
 
     @pyqtSlot(str)
     def _on_preview_failed(self, message: str) -> None:
+        self._auto_previewed_paths = None
         self._append_log(f"【错误】预览失败：{message}")
         self._set_status(f"预览失败：{message}", error=True)
         self.preview_button.setEnabled(True)
