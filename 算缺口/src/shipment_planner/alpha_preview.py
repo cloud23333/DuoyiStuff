@@ -196,7 +196,7 @@ def interpolate_ship_lost(
         return (float(ordered[0].ship_units), float(ordered[0].lost_units))
     if alpha >= ordered[-1].alpha:
         return (float(ordered[-1].ship_units), float(ordered[-1].lost_units))
-    for low, high in zip(ordered, ordered[1:]):
+    for low, high in zip(ordered, ordered[1:], strict=False):
         if low.alpha <= alpha <= high.alpha:
             span = high.alpha - low.alpha
             t = 0.0 if span == 0 else (alpha - low.alpha) / span

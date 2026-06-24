@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import QObject, Qt, QThread, QUrl, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication, QPixmap
+from PyQt6.QtGui import QDesktopServices, QFont, QGuiApplication
 from PyQt6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
@@ -33,7 +32,7 @@ from planner_ui.workflow import (
     get_constraints_path,
     run_planner,
 )
-from shipment_planner.alpha_preview import AlphaCurve
+from shipment_planner.alpha_preview import AlphaCurve, interpolate_ship_lost
 from shipment_planner.engine import DEFAULT_BASE_STOCK_QTY
 
 
@@ -216,21 +215,21 @@ class PlannerWindow(QMainWindow):
 
         self.alpha_slider = QSlider(Qt.Orientation.Horizontal)
         self.alpha_slider.setRange(50, 100)
-        self.alpha_slider.setSingleStep(5)
+        self.alpha_slider.setSingleStep(1)
         self.alpha_slider.setPageStep(5)
         self.alpha_slider.setValue(100)
         self.alpha_slider.valueChanged.connect(self._on_alpha_slider_changed)
         self.alpha_slider.valueChanged.connect(self._update_alpha_estimate)
-        self.alpha_slider.sliderReleased.connect(self._render_alpha_plot)
+        self.alpha_slider.valueChanged.connect(self._update_alpha_marker)
 
         self.alpha_value_spin = QDoubleSpinBox()
         self.alpha_value_spin.setDecimals(2)
         self.alpha_value_spin.setRange(0.50, 1.00)
-        self.alpha_value_spin.setSingleStep(0.05)
+        self.alpha_value_spin.setSingleStep(0.01)
         self.alpha_value_spin.setValue(1.0)
         self.alpha_value_spin.setFixedWidth(90)
         self.alpha_value_spin.valueChanged.connect(self._on_alpha_spin_changed)
-        self.alpha_value_spin.editingFinished.connect(self._render_alpha_plot)
+        self.alpha_value_spin.valueChanged.connect(self._update_alpha_marker)
 
         self.alpha_suggested_label = QLabel("建议值：—")
         self.alpha_adopt_button = QPushButton("采用建议")
@@ -249,9 +248,7 @@ class PlannerWindow(QMainWindow):
         self.preview_button.setToolTip("文件没变、但磁盘上的数据更新了，可点此重新预览")
         self.preview_button.clicked.connect(self._on_preview_clicked)
 
-        self.alpha_plot_label = QLabel()
-        self.alpha_plot_label.setFixedSize(440, 220)
-        self.alpha_plot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._init_alpha_canvas()
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
@@ -312,7 +309,7 @@ class PlannerWindow(QMainWindow):
 
         plot_row = QHBoxLayout()
         plot_row.addStretch(1)
-        plot_row.addWidget(self.alpha_plot_label)
+        plot_row.addWidget(self.alpha_canvas)
         plot_row.addStretch(1)
 
         card_layout.addLayout(action_row)
@@ -533,7 +530,6 @@ class PlannerWindow(QMainWindow):
         if self._alpha_curve is None:
             return
         self.alpha_slider.setValue(round(self._alpha_curve.suggested_alpha * 100))
-        self._render_alpha_plot()
 
     def _maybe_auto_preview(self) -> None:
         if self._preview_thread is not None:
@@ -600,7 +596,7 @@ class PlannerWindow(QMainWindow):
         self.alpha_value_spin.setEnabled(True)
         self.alpha_adopt_button.setEnabled(True)
         self.alpha_suggested_label.setText(f"建议值：{curve.suggested_alpha:.2f}")
-        self._render_alpha_plot()
+        self._draw_alpha_curve(curve)
         self._update_alpha_estimate()
         self.preview_button.setEnabled(True)
         self._set_status("预览完成，可拖动滑块查看预计发货量。")
@@ -637,73 +633,95 @@ class PlannerWindow(QMainWindow):
             f"预计今日发货 ≈ {point.ship_units} 件（比正常 {pct:+.0f}%）"
         )
 
-    def _render_alpha_plot(self) -> None:
-        curve = self._alpha_curve
-        if curve is None or not curve.points:
-            return
-
+    def _init_alpha_canvas(self) -> None:
         import matplotlib
-        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         from matplotlib.figure import Figure
 
         cjk_font = _resolve_cjk_font()
-        previous_sans = matplotlib.rcParams["font.sans-serif"]
-        previous_minus = matplotlib.rcParams["axes.unicode_minus"]
         if cjk_font is not None:
-            matplotlib.rcParams["font.sans-serif"] = [cjk_font, *previous_sans]
+            matplotlib.rcParams["font.sans-serif"] = [
+                cjk_font,
+                *matplotlib.rcParams["font.sans-serif"],
+            ]
             matplotlib.rcParams["axes.unicode_minus"] = False
 
-        figure = Figure(figsize=(4.6, 2.4), dpi=120)
-        FigureCanvasAgg(figure)
-        try:
-            self._draw_alpha_axes(figure, curve, use_cjk=cjk_font is not None)
-            buffer = io.BytesIO()
-            figure.savefig(buffer, format="png")
-        finally:
-            figure.clear()
-            matplotlib.rcParams["font.sans-serif"] = previous_sans
-            matplotlib.rcParams["axes.unicode_minus"] = previous_minus
+        self.alpha_figure = Figure(figsize=(4.6, 2.4), dpi=120)
+        self.alpha_canvas = FigureCanvasQTAgg(self.alpha_figure)
+        self.alpha_canvas.setFixedSize(440, 220)
 
-        pixmap = QPixmap()
-        pixmap.loadFromData(buffer.getvalue())
-        self.alpha_plot_label.setPixmap(pixmap)
+        self._alpha_axes_drawn = False
+        self._ax_ship = None
+        self._ax_lost = None
+        self._cursor_line = None
+        self._ship_marker = None
+        self._lost_marker = None
+        self._cursor_text = None
 
-    def _draw_alpha_axes(self, figure, curve: AlphaCurve, *, use_cjk: bool) -> None:
-        labels = _PLOT_LABELS_CJK if use_cjk else _PLOT_LABELS_EN
+    def _draw_alpha_curve(self, curve: AlphaCurve) -> None:
+        if not curve.points:
+            return
+
+        labels = _PLOT_LABELS_CJK if _resolve_cjk_font() is not None else _PLOT_LABELS_EN
         ordered = sorted(curve.points, key=lambda p: p.alpha)
         alphas = [p.alpha for p in ordered]
         ship_units = [p.ship_units for p in ordered]
         lost_units = [p.lost_units for p in ordered]
 
-        ax_ship = figure.add_subplot(111)
-        ship_line, = ax_ship.plot(
+        self.alpha_figure.clear()
+        self._ax_ship = self.alpha_figure.add_subplot(111)
+        ship_line, = self._ax_ship.plot(
             alphas, ship_units, color="#1f77b4", marker="o", markersize=3,
             label=labels["ship"],
         )
-        ax_ship.set_xlabel("α", fontsize=7)
-        ax_ship.set_ylabel(labels["ship"], color="#1f77b4", fontsize=7)
-        ax_ship.tick_params(axis="both", labelsize=6)
-        ax_ship.tick_params(axis="y", labelcolor="#1f77b4")
+        self._ax_ship.set_xlabel("α", fontsize=7)
+        self._ax_ship.set_ylabel(labels["ship"], color="#1f77b4", fontsize=7)
+        self._ax_ship.tick_params(axis="both", labelsize=6)
+        self._ax_ship.tick_params(axis="y", labelcolor="#1f77b4")
 
-        ax_lost = ax_ship.twinx()
-        lost_line, = ax_lost.plot(
+        self._ax_lost = self._ax_ship.twinx()
+        lost_line, = self._ax_lost.plot(
             alphas, lost_units, color="#d62728", marker="s", markersize=3,
             label=labels["risk"],
         )
-        ax_lost.set_ylabel(labels["risk"], color="#d62728", fontsize=7)
-        ax_lost.tick_params(axis="y", labelsize=6, labelcolor="#d62728")
+        self._ax_lost.set_ylabel(labels["risk"], color="#d62728", fontsize=7)
+        self._ax_lost.tick_params(axis="y", labelsize=6, labelcolor="#d62728")
 
-        current_alpha = self.alpha_slider.value() / 100
-        current_line = ax_ship.axvline(
-            current_alpha, color="#333333", linewidth=1.0, label=labels["current"]
+        ship_at_suggested = interpolate_ship_lost(
+            curve.points, curve.suggested_alpha
+        )[0]
+        self._ax_ship.plot(
+            [curve.suggested_alpha], [ship_at_suggested],
+            color="#2ca02c", marker="*", markersize=11, zorder=5,
         )
-        suggested_line = ax_ship.axvline(
+        suggested_line = self._ax_ship.axvline(
             curve.suggested_alpha, color="#2ca02c", linewidth=1.0, linestyle="--",
             label=labels["suggested"],
         )
+        self._ax_ship.annotate(
+            f"{labels['suggested']} {curve.suggested_alpha:.2f}",
+            xy=(curve.suggested_alpha, ship_at_suggested),
+            fontsize=6, color="#2ca02c",
+        )
 
-        handles = [ship_line, lost_line, current_line, suggested_line]
-        ax_ship.legend(
+        current_alpha = self.alpha_slider.value() / 100
+        self._cursor_line = self._ax_ship.axvline(
+            current_alpha, color="#333333", linewidth=1.0, label=labels["current"]
+        )
+        self._ship_marker, = self._ax_ship.plot(
+            [], [], color="#1f77b4", marker="o", markersize=6, zorder=6
+        )
+        self._lost_marker, = self._ax_lost.plot(
+            [], [], color="#d62728", marker="o", markersize=6, zorder=6
+        )
+        self._cursor_text = self._ax_ship.text(
+            current_alpha, 1.0, f"α={current_alpha:.2f}",
+            transform=self._ax_ship.get_xaxis_transform(),
+            fontsize=6, ha="left", va="bottom",
+        )
+
+        handles = [ship_line, lost_line, self._cursor_line, suggested_line]
+        self._ax_ship.legend(
             handles=handles,
             labels=[handle.get_label() for handle in handles],
             fontsize=6,
@@ -715,7 +733,26 @@ class PlannerWindow(QMainWindow):
             handlelength=1.4,
             handletextpad=0.4,
         )
-        figure.tight_layout(pad=0.6)
+        self.alpha_figure.tight_layout(pad=0.6)
+        self._alpha_axes_drawn = True
+        self._update_alpha_marker()
+
+    def _update_alpha_marker(self) -> None:
+        if (
+            self._alpha_curve is None
+            or not self._alpha_axes_drawn
+            or self._alpha_syncing
+        ):
+            return
+
+        current_alpha = self.alpha_slider.value() / 100
+        ship, lost = interpolate_ship_lost(self._alpha_curve.points, current_alpha)
+        self._cursor_line.set_xdata([current_alpha, current_alpha])
+        self._ship_marker.set_data([current_alpha], [ship])
+        self._lost_marker.set_data([current_alpha], [lost])
+        self._cursor_text.set_position((current_alpha, 1.0))
+        self._cursor_text.set_text(f"α={current_alpha:.2f}")
+        self.alpha_canvas.draw_idle()
 
     @pyqtSlot(object)
     def _on_run_finished(self, result_obj: object) -> None:
