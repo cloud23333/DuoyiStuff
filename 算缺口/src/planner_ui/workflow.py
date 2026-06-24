@@ -87,6 +87,7 @@ def run_planner(
     output_dir: str | Path,
     service_level_offset: float,
     base_stock_qty: int,
+    protection_interval_factor: float,
     temu_sales_path: str | Path,
 ) -> PlannerRunResult:
     orders = Path(orders_path)
@@ -129,6 +130,8 @@ def run_planner(
         str(service_level_offset),
         "--base-stock-qty",
         str(base_stock_qty),
+        "--protection-interval-factor",
+        str(protection_interval_factor),
         "--temu-sales",
         str(temu_sales),
     ]
