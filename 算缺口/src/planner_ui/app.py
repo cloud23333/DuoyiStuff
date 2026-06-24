@@ -235,6 +235,11 @@ class PlannerWindow(QMainWindow):
 
         self.alpha_estimate_label = QLabel("预计今日发货：先点“预览发货量”")
         self.alpha_estimate_label.setWordWrap(True)
+        estimate_font = QFont()
+        estimate_font.setBold(True)
+        estimate_font.setPointSize(13)
+        self.alpha_estimate_label.setFont(estimate_font)
+        self.alpha_estimate_label.setStyleSheet("color: #0f766e;")
 
         self.preview_button = QPushButton("预览发货量")
         self.preview_button.clicked.connect(self._on_preview_clicked)
@@ -258,21 +263,7 @@ class PlannerWindow(QMainWindow):
         params_grid.addWidget(QLabel("保底库存"), 0, 2)
         params_grid.addWidget(self.base_stock_qty_spin, 0, 3)
 
-        params_grid.addWidget(QLabel("发货保守度 α（越小越保守，少发降积压）"), 1, 0)
-        alpha_row = QHBoxLayout()
-        alpha_row.setSpacing(8)
-        alpha_row.addWidget(self.alpha_slider, stretch=1)
-        alpha_row.addWidget(self.alpha_value_spin)
-        alpha_row.addWidget(self.preview_button)
-        alpha_row.addWidget(self.alpha_suggested_label)
-        alpha_row.addWidget(self.alpha_adopt_button)
-        params_grid.addLayout(alpha_row, 1, 1, 1, 4)
-
-        params_grid.addWidget(self.alpha_estimate_label, 2, 0, 1, 5)
-
-        plot_row = QHBoxLayout()
-        plot_row.addWidget(self.alpha_plot_label)
-        plot_row.addStretch(1)
+        alpha_card = self._build_alpha_card()
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
@@ -280,9 +271,50 @@ class PlannerWindow(QMainWindow):
         action_row.addWidget(self.run_button)
 
         layout.addLayout(params_grid)
-        layout.addLayout(plot_row)
+        layout.addWidget(alpha_card)
         layout.addLayout(action_row)
         return group
+
+    def _build_alpha_card(self) -> QGroupBox:
+        card = QGroupBox("发货保守度 α · 越小越保守，少发降积压")
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(8)
+        card_layout.setContentsMargins(10, 6, 10, 8)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        action_row.addWidget(self.preview_button)
+        action_row.addStretch(1)
+        action_row.addWidget(self.alpha_suggested_label)
+        action_row.addWidget(self.alpha_adopt_button)
+
+        anchor_font = QFont()
+        anchor_font.setPointSize(8)
+        left_anchor = QLabel("正常 1.0")
+        left_anchor.setFont(anchor_font)
+        left_anchor.setStyleSheet("color: #888;")
+        right_anchor = QLabel("0.5 保守")
+        right_anchor.setFont(anchor_font)
+        right_anchor.setStyleSheet("color: #888;")
+
+        slider_row = QHBoxLayout()
+        slider_row.setSpacing(8)
+        slider_row.addWidget(left_anchor)
+        slider_row.addWidget(self.alpha_slider, stretch=1)
+        slider_row.addWidget(right_anchor)
+        slider_row.addWidget(QLabel("α"))
+        slider_row.addWidget(self.alpha_value_spin)
+
+        plot_row = QHBoxLayout()
+        plot_row.addStretch(1)
+        plot_row.addWidget(self.alpha_plot_label)
+        plot_row.addStretch(1)
+
+        card_layout.addLayout(action_row)
+        card_layout.addLayout(slider_row)
+        card_layout.addWidget(self.alpha_estimate_label)
+        card_layout.addLayout(plot_row)
+        return card
 
     def _build_skc_group(self) -> QGroupBox:
         group = QGroupBox("SKC")
@@ -589,44 +621,78 @@ class PlannerWindow(QMainWindow):
         if curve is None or not curve.points:
             return
 
+        import matplotlib
         from matplotlib.backends.backend_agg import FigureCanvasAgg
         from matplotlib.figure import Figure
 
-        figure = Figure(figsize=(4.4, 2.2), dpi=120)
-        canvas = FigureCanvasAgg(figure)
+        cjk_font = _resolve_cjk_font()
+        previous_sans = matplotlib.rcParams["font.sans-serif"]
+        previous_minus = matplotlib.rcParams["axes.unicode_minus"]
+        if cjk_font is not None:
+            matplotlib.rcParams["font.sans-serif"] = [cjk_font, *previous_sans]
+            matplotlib.rcParams["axes.unicode_minus"] = False
+
+        figure = Figure(figsize=(4.6, 2.4), dpi=120)
+        FigureCanvasAgg(figure)
         try:
-            self._draw_alpha_axes(figure, curve)
+            self._draw_alpha_axes(figure, curve, use_cjk=cjk_font is not None)
             buffer = io.BytesIO()
             figure.savefig(buffer, format="png")
         finally:
             figure.clear()
+            matplotlib.rcParams["font.sans-serif"] = previous_sans
+            matplotlib.rcParams["axes.unicode_minus"] = previous_minus
 
         pixmap = QPixmap()
         pixmap.loadFromData(buffer.getvalue())
         self.alpha_plot_label.setPixmap(pixmap)
 
-    def _draw_alpha_axes(self, figure, curve: AlphaCurve) -> None:
+    def _draw_alpha_axes(self, figure, curve: AlphaCurve, *, use_cjk: bool) -> None:
+        labels = _PLOT_LABELS_CJK if use_cjk else _PLOT_LABELS_EN
         ordered = sorted(curve.points, key=lambda p: p.alpha)
         alphas = [p.alpha for p in ordered]
         ship_units = [p.ship_units for p in ordered]
         lost_units = [p.lost_units for p in ordered]
 
         ax_ship = figure.add_subplot(111)
-        ax_ship.plot(alphas, ship_units, color="#1f77b4", marker="o", markersize=3)
+        ship_line, = ax_ship.plot(
+            alphas, ship_units, color="#1f77b4", marker="o", markersize=3,
+            label=labels["ship"],
+        )
         ax_ship.set_xlabel("α", fontsize=7)
-        ax_ship.set_ylabel("发货量", color="#1f77b4", fontsize=7)
+        ax_ship.set_ylabel(labels["ship"], color="#1f77b4", fontsize=7)
         ax_ship.tick_params(axis="both", labelsize=6)
         ax_ship.tick_params(axis="y", labelcolor="#1f77b4")
 
         ax_lost = ax_ship.twinx()
-        ax_lost.plot(alphas, lost_units, color="#d62728", marker="s", markersize=3)
-        ax_lost.set_ylabel("缺货风险", color="#d62728", fontsize=7)
+        lost_line, = ax_lost.plot(
+            alphas, lost_units, color="#d62728", marker="s", markersize=3,
+            label=labels["risk"],
+        )
+        ax_lost.set_ylabel(labels["risk"], color="#d62728", fontsize=7)
         ax_lost.tick_params(axis="y", labelsize=6, labelcolor="#d62728")
 
         current_alpha = self.alpha_slider.value() / 100
-        ax_ship.axvline(current_alpha, color="#333333", linewidth=1.0)
-        ax_ship.axvline(
-            curve.suggested_alpha, color="#2ca02c", linewidth=1.0, linestyle="--"
+        current_line = ax_ship.axvline(
+            current_alpha, color="#333333", linewidth=1.0, label=labels["current"]
+        )
+        suggested_line = ax_ship.axvline(
+            curve.suggested_alpha, color="#2ca02c", linewidth=1.0, linestyle="--",
+            label=labels["suggested"],
+        )
+
+        handles = [ship_line, lost_line, current_line, suggested_line]
+        ax_ship.legend(
+            handles=handles,
+            labels=[handle.get_label() for handle in handles],
+            fontsize=6,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.18),
+            ncol=2,
+            frameon=False,
+            columnspacing=1.2,
+            handlelength=1.4,
+            handletextpad=0.4,
         )
         figure.tight_layout(pad=0.6)
 
@@ -951,6 +1017,42 @@ class PlannerWindow(QMainWindow):
         if not 0.0 < protection_interval_factor <= 1.0:
             return "备货期覆盖系数 α 需在 (0, 1] 之间。"
         return None
+
+
+_CJK_FONT_CANDIDATES = (
+    "PingFang SC",
+    "Heiti SC",
+    "STHeiti",
+    "Arial Unicode MS",
+    "Hiragino Sans GB",
+)
+_PLOT_LABELS_CJK = {
+    "ship": "发货量",
+    "risk": "缺货风险",
+    "current": "当前",
+    "suggested": "建议",
+}
+_PLOT_LABELS_EN = {
+    "ship": "ship",
+    "risk": "stockout risk",
+    "current": "current",
+    "suggested": "suggested",
+}
+_resolved_cjk_font: list[str | None] = []
+
+
+def _resolve_cjk_font() -> str | None:
+    if _resolved_cjk_font:
+        return _resolved_cjk_font[0]
+
+    from matplotlib import font_manager
+
+    available = {font.name for font in font_manager.fontManager.ttflist}
+    chosen = next(
+        (family for family in _CJK_FONT_CANDIDATES if family in available), None
+    )
+    _resolved_cjk_font.append(chosen)
+    return chosen
 
 
 def _monospace_font() -> QFont:
